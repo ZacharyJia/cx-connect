@@ -64,6 +64,44 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 			case <-ctx.Done():
 				return
 			case update := <-updates:
+				// Handle callback query (button clicks)
+				if update.CallbackQuery != nil {
+					cbq := update.CallbackQuery
+					userName := cbq.From.UserName
+					if userName == "" {
+						userName = strings.TrimSpace(cbq.From.FirstName + " " + cbq.From.LastName)
+					}
+
+					// Answer callback query first (required to show buttons)
+					cbqConfig := tgbotapi.CallbackConfig{
+						CallbackQueryID: cbq.ID,
+						ShowAlert:       false,
+					}
+					p.bot.Request(cbqConfig)
+
+					// Callback query might not have Message in some cases
+					chatID := cbq.From.ID
+					messageID := 0
+					if cbq.Message != nil {
+						chatID = cbq.Message.Chat.ID
+						messageID = cbq.Message.MessageID
+					}
+
+					sessionKey := fmt.Sprintf("telegram:%d:%d", chatID, cbq.From.ID)
+					rctx := replyContext{chatID: chatID, messageID: messageID}
+
+					coreMsg := &core.Message{
+						SessionKey: sessionKey,
+						Platform:   "telegram",
+						UserID:     strconv.FormatInt(cbq.From.ID, 10),
+						UserName:   userName,
+						Content:    cbq.Data, // Button callback data as content
+						ReplyCtx:   rctx,
+					}
+					p.handler(p, coreMsg)
+					continue
+				}
+
 				if update.Message == nil {
 					continue
 				}
@@ -190,6 +228,45 @@ func (p *Platform) Reply(ctx context.Context, rctx any, content string) error {
 		}
 		if err != nil {
 			return fmt.Errorf("telegram: send: %w", err)
+		}
+	}
+	return nil
+}
+
+// ReplyWithButtons sends a message with inline keyboard buttons.
+func (p *Platform) ReplyWithButtons(ctx context.Context, rctx any, content string, buttons []core.Button) error {
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return fmt.Errorf("telegram: invalid reply context type %T", rctx)
+	}
+
+	reply := tgbotapi.NewMessage(rc.chatID, content)
+	reply.ParseMode = tgbotapi.ModeMarkdown
+	reply.ReplyToMessageID = rc.messageID
+
+	// Convert buttons to inline keyboard
+	var keyboard [][]tgbotapi.InlineKeyboardButton
+	var row []tgbotapi.InlineKeyboardButton
+	for i, btn := range buttons {
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData(btn.Text, btn.Data))
+		// Create new row every 2 buttons or at the end
+		if len(row) == 2 || i == len(buttons)-1 {
+			keyboard = append(keyboard, row)
+			row = nil
+		}
+	}
+	reply.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{InlineKeyboard: keyboard}
+
+	slog.Debug("telegram: sending message with buttons", "chat_id", rc.chatID, "buttons", len(buttons))
+
+	if _, err := p.bot.Send(reply); err != nil {
+		// Markdown parse failure → retry as plain text
+		if strings.Contains(err.Error(), "can't parse") {
+			reply.ParseMode = ""
+			_, err = p.bot.Send(reply)
+		}
+		if err != nil {
+			return fmt.Errorf("telegram: send with buttons: %w", err)
 		}
 	}
 	return nil

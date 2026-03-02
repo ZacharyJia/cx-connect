@@ -285,6 +285,11 @@ func (p *Platform) Reply(ctx context.Context, replyCtx any, content string) erro
 	return p.Send(ctx, replyCtx, content)
 }
 
+// ReplyWithButtons is not supported in QQ
+func (p *Platform) ReplyWithButtons(ctx context.Context, rctx any, content string, buttons []core.Button) error {
+	return core.ErrNotSupported
+}
+
 // Send sends a message to the conversation identified by replyCtx.
 func (p *Platform) Send(ctx context.Context, replyCtx any, content string) error {
 	rctx, ok := replyCtx.(*replyContext)

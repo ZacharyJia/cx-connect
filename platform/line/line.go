@@ -218,6 +218,11 @@ func (p *Platform) Reply(ctx context.Context, rctx any, content string) error {
 	return nil
 }
 
+// ReplyWithButtons is not supported in LINE
+func (p *Platform) ReplyWithButtons(ctx context.Context, rctx any, content string, buttons []core.Button) error {
+	return core.ErrNotSupported
+}
+
 // Send sends a new message (same as Reply for LINE)
 func (p *Platform) Send(ctx context.Context, rctx any, content string) error {
 	return p.Reply(ctx, rctx, content)

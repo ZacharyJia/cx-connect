@@ -2,9 +2,13 @@ package core
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,21 +18,24 @@ import (
 	"github.com/chenhg5/cc-connect/config"
 )
 
-const maxPlatformMessageLen = 4000
+const (
+	maxPlatformMessageLen       = 4000
+	newSessionDefaultButtonData = "cc:new:default"
+)
 
 // VersionInfo is set by main at startup so that /version works.
 var VersionInfo string
 
 // Engine routes messages between platforms and the agent for a single project.
 type Engine struct {
-	name      string
-	agent     Agent
-	platforms []Platform
-	sessions  *SessionManager
-	ctx       context.Context
-	cancel    context.CancelFunc
-	i18n      *I18n
-	speech    SpeechCfg
+	name       string
+	agent      Agent
+	platforms  []Platform
+	sessions   *SessionManager
+	ctx        context.Context
+	cancel     context.CancelFunc
+	i18n       *I18n
+	speech     SpeechCfg
 	allowUsers map[string]bool // key = "platform:user_id"
 
 	providerSaveFunc       func(providerName string) error
@@ -40,6 +47,7 @@ type Engine struct {
 	// Interactive agent session management
 	interactiveMu     sync.Mutex
 	interactiveStates map[string]*interactiveState // key = sessionKey
+	pendingNewSession map[string]*pendingNewSessionState
 }
 
 // interactiveState tracks a running interactive agent session and its permission state.
@@ -62,6 +70,11 @@ type pendingPermission struct {
 	Resolved     chan struct{} // closed when user responds
 }
 
+// pendingNewSessionState tracks a /new flow waiting for the user to provide work dir.
+type pendingNewSessionState struct {
+	Name string
+}
+
 func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath string, lang Language, allowUsers []config.AllowUser) *Engine {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -81,6 +94,7 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		cancel:            cancel,
 		i18n:              NewI18n(lang),
 		interactiveStates: make(map[string]*interactiveState),
+		pendingNewSession: make(map[string]*pendingNewSessionState),
 		allowUsers:        allowUsersMap,
 	}
 }
@@ -246,6 +260,10 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		return
 	}
 
+	if e.handlePendingNewSession(p, msg, content) {
+		return
+	}
+
 	// Permission responses bypass the session lock
 	if e.handlePendingPermission(p, msg, content) {
 		return
@@ -373,6 +391,27 @@ func (e *Engine) handlePendingPermission(p Platform, msg *Message, content strin
 	state.mu.Unlock()
 	close(pending.Resolved)
 
+	return true
+}
+
+func (e *Engine) handlePendingNewSession(p Platform, msg *Message, content string) bool {
+	e.interactiveMu.Lock()
+	pending, ok := e.pendingNewSession[msg.SessionKey]
+	e.interactiveMu.Unlock()
+	if !ok || pending == nil {
+		return false
+	}
+
+	workDir, displayDir, err := e.resolveSessionWorkDir(pending.Name, content)
+	if err != nil {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgNewSessionInputHint), e.defaultSessionDisplayDirName(pending.Name)))
+		return true
+	}
+
+	e.clearPendingNewSession(msg.SessionKey)
+	s := e.sessions.NewSession(msg.SessionKey, pending.Name, workDir)
+	e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgNewSessionCreated), s.Name, s.ID, displayDir))
 	return true
 }
 
@@ -682,18 +721,42 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) {
 
 func (e *Engine) cmdNew(p Platform, msg *Message, args []string) {
 	e.cleanupInteractiveState(msg.SessionKey)
-	name := "session"
-	workDir := ""
+
+	name := newRandomSessionName()
 	if len(args) > 0 {
-		// First arg is session name, rest could be work dir
 		name = args[0]
-		if len(args) > 1 {
-			workDir = args[1]
-		}
 	}
-	s := e.sessions.NewSession(msg.SessionKey, name, workDir)
-	e.reply(p, msg.ReplyCtx,
-		fmt.Sprintf("✅ New session created: %s (id: %s)", s.Name, s.ID))
+	workDir := ""
+	if len(args) > 1 {
+		workDir = strings.TrimSpace(strings.Join(args[1:], " "))
+	}
+
+	e.clearPendingNewSession(msg.SessionKey)
+
+	// Explicit work dir provided: create immediately.
+	if workDir != "" {
+		resolvedDir, displayDir, err := e.resolveSessionWorkDir(name, workDir)
+		if err != nil {
+			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
+			return
+		}
+		s := e.sessions.NewSession(msg.SessionKey, name, resolvedDir)
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgNewSessionCreated), s.Name, s.ID, displayDir))
+		return
+	}
+
+	// No work dir provided: ask user to pick default or enter a path.
+	e.setPendingNewSession(msg.SessionKey, name)
+	defaultDisplay := e.defaultSessionDisplayDirName(name)
+	prompt := fmt.Sprintf("%s\n\n1. %s\n2. %s\n\n%s",
+		fmt.Sprintf(e.i18n.T(MsgNewSessionWorkDir), name),
+		fmt.Sprintf(e.i18n.T(MsgNewSessionDefaultDir), defaultDisplay),
+		e.i18n.T(MsgNewSessionCustomDir),
+		fmt.Sprintf(e.i18n.T(MsgNewSessionInputHint), defaultDisplay),
+	)
+	e.replyWithButtons(p, msg.ReplyCtx, prompt, []Button{
+		{Text: e.i18n.T(MsgNewSessionUseDefault), Data: newSessionDefaultButtonData},
+	})
 }
 
 func (e *Engine) cmdList(p Platform, msg *Message) {
@@ -1256,6 +1319,133 @@ func (e *Engine) reply(p Platform, replyCtx any, content string) {
 	if err := p.Reply(e.ctx, replyCtx, content); err != nil {
 		slog.Error("platform reply failed", "platform", p.Name(), "error", err, "content_len", len(content))
 	}
+}
+
+// replyWithButtons wraps p.ReplyWithButtons, falls back to regular reply if not supported.
+func (e *Engine) replyWithButtons(p Platform, replyCtx any, content string, buttons []Button) {
+	if err := p.ReplyWithButtons(e.ctx, replyCtx, content, buttons); err != nil {
+		if err == ErrNotSupported {
+			// Fall back to regular reply
+			e.reply(p, replyCtx, content)
+		} else {
+			slog.Error("platform reply with buttons failed", "platform", p.Name(), "error", err)
+			// Fall back to regular reply on error
+			e.reply(p, replyCtx, content)
+		}
+	}
+}
+
+func (e *Engine) setPendingNewSession(sessionKey, name string) {
+	e.interactiveMu.Lock()
+	defer e.interactiveMu.Unlock()
+	e.pendingNewSession[sessionKey] = &pendingNewSessionState{Name: name}
+}
+
+func (e *Engine) clearPendingNewSession(sessionKey string) {
+	e.interactiveMu.Lock()
+	defer e.interactiveMu.Unlock()
+	delete(e.pendingNewSession, sessionKey)
+}
+
+func (e *Engine) resolveSessionWorkDir(sessionName, input string) (string, string, error) {
+	workDir := strings.TrimSpace(input)
+	if workDir == "" {
+		return "", "", fmt.Errorf("working directory cannot be empty")
+	}
+
+	if isDefaultSessionWorkDirInput(workDir) {
+		abs := e.defaultSessionAbsDir(sessionName)
+		if err := os.MkdirAll(abs, 0o755); err != nil {
+			return "", "", fmt.Errorf("create default work dir %q: %w", abs, err)
+		}
+		return abs, e.formatDisplayPath(abs), nil
+	}
+
+	if strings.HasPrefix(workDir, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		if workDir == "~" {
+			workDir = home
+		} else if strings.HasPrefix(workDir, "~/") {
+			workDir = filepath.Join(home, strings.TrimPrefix(workDir, "~/"))
+		}
+	}
+
+	abs, err := filepath.Abs(workDir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve working directory %q: %w", workDir, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", "", fmt.Errorf("work directory not found: %s", abs)
+	}
+	if !info.IsDir() {
+		return "", "", fmt.Errorf("work directory is not a directory: %s", abs)
+	}
+
+	return abs, e.formatDisplayPath(abs), nil
+}
+
+func isDefaultSessionWorkDirInput(input string) bool {
+	v := strings.ToLower(strings.TrimSpace(input))
+	switch v {
+	case "default", "use default", "默认", "默认目录", newSessionDefaultButtonData:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) defaultSessionAbsDir(sessionName string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, ".cc-connect", "workspace", sanitizeSessionNameForPath(sessionName))
+}
+
+func (e *Engine) defaultSessionDisplayDirName(sessionName string) string {
+	return filepath.Join("~", ".cc-connect", "workspace", sanitizeSessionNameForPath(sessionName))
+}
+
+func sanitizeSessionNameForPath(name string) string {
+	safe := strings.TrimSpace(name)
+	if safe == "" || safe == "." || safe == ".." {
+		return "session"
+	}
+
+	safe = strings.ReplaceAll(safe, "/", "_")
+	safe = strings.ReplaceAll(safe, "\\", "_")
+	safe = strings.ReplaceAll(safe, ":", "_")
+	if safe == "" {
+		return "session"
+	}
+	return safe
+}
+
+func newRandomSessionName() string {
+	var b [3]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return "session-" + hex.EncodeToString(b[:])
+	}
+	return "session-" + strconv.FormatInt(time.Now().UnixNano()%1_000_000, 10)
+}
+
+func (e *Engine) formatDisplayPath(abs string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return abs
+	}
+	if abs == home {
+		return "~"
+	}
+	prefix := home + string(filepath.Separator)
+	if strings.HasPrefix(abs, prefix) {
+		return "~" + string(filepath.Separator) + strings.TrimPrefix(abs, prefix)
+	}
+	return abs
 }
 
 // ──────────────────────────────────────────────────────────────

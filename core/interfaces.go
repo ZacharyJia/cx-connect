@@ -11,7 +11,14 @@ type Platform interface {
 	Start(handler MessageHandler) error
 	Reply(ctx context.Context, replyCtx any, content string) error
 	Send(ctx context.Context, replyCtx any, content string) error
+	ReplyWithButtons(ctx context.Context, replyCtx any, content string, buttons []Button) error
 	Stop() error
+}
+
+// Button represents a clickable button.
+type Button struct {
+	Text string // Button label
+	Data string // Callback data (for inline buttons)
 }
 
 // ErrNotSupported indicates a platform doesn't support a particular operation.

@@ -247,6 +247,11 @@ func (p *Platform) Reply(ctx context.Context, rctx any, content string) error {
 	return nil
 }
 
+// ReplyWithButtons is not supported in Feishu
+func (p *Platform) ReplyWithButtons(ctx context.Context, rctx any, content string, buttons []core.Button) error {
+	return core.ErrNotSupported
+}
+
 // Send sends a new message to the same chat (not a reply to original message)
 func (p *Platform) Send(ctx context.Context, rctx any, content string) error {
 	rc, ok := rctx.(replyContext)

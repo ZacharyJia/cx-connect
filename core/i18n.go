@@ -110,6 +110,12 @@ const (
 	MsgLangChanged          MsgKey = "lang_changed"
 	MsgLangInvalid          MsgKey = "lang_invalid"
 	MsgLangCurrent          MsgKey = "lang_current"
+	MsgNewSessionWorkDir    MsgKey = "new_session_work_dir"
+	MsgNewSessionDefaultDir MsgKey = "new_session_default_dir"
+	MsgNewSessionCustomDir  MsgKey = "new_session_custom_dir"
+	MsgNewSessionInputHint  MsgKey = "new_session_input_hint"
+	MsgNewSessionUseDefault MsgKey = "new_session_use_default"
+	MsgNewSessionCreated    MsgKey = "new_session_created"
 	MsgHelp                 MsgKey = "help"
 	MsgListTitle            MsgKey = "list_title"
 	MsgListEmpty            MsgKey = "list_empty"
@@ -131,12 +137,12 @@ const (
 	MsgProviderRemoved      MsgKey = "provider_removed"
 	MsgProviderRemoveFailed MsgKey = "provider_remove_failed"
 
-	MsgVoiceNotEnabled      MsgKey = "voice_not_enabled"
-	MsgVoiceNoFFmpeg        MsgKey = "voice_no_ffmpeg"
-	MsgVoiceTranscribing    MsgKey = "voice_transcribing"
-	MsgVoiceTranscribed     MsgKey = "voice_transcribed"
+	MsgVoiceNotEnabled       MsgKey = "voice_not_enabled"
+	MsgVoiceNoFFmpeg         MsgKey = "voice_no_ffmpeg"
+	MsgVoiceTranscribing     MsgKey = "voice_transcribing"
+	MsgVoiceTranscribed      MsgKey = "voice_transcribed"
 	MsgVoiceTranscribeFailed MsgKey = "voice_transcribe_failed"
-	MsgVoiceEmpty           MsgKey = "voice_empty"
+	MsgVoiceEmpty            MsgKey = "voice_empty"
 
 	MsgCronNotAvailable MsgKey = "cron_not_available"
 	MsgCronUsage        MsgKey = "cron_usage"
@@ -258,6 +264,30 @@ var messages = map[MsgKey]map[Language]string{
 	MsgLangCurrent: {
 		LangEnglish: "🌐 Current language: **%s**\n\nUsage: /lang <en|zh|auto>",
 		LangChinese: "🌐 当前语言: **%s**\n\n用法: /lang <en|zh|auto>",
+	},
+	MsgNewSessionWorkDir: {
+		LangEnglish: "📁 Please select the working directory for session **%s**:",
+		LangChinese: "📁 请为会话 **%s** 选择工作目录：",
+	},
+	MsgNewSessionDefaultDir: {
+		LangEnglish: "Use default (%s)",
+		LangChinese: "使用默认目录 (%s)",
+	},
+	MsgNewSessionCustomDir: {
+		LangEnglish: "Enter custom path",
+		LangChinese: "输入自定义路径",
+	},
+	MsgNewSessionInputHint: {
+		LangEnglish: "Reply with a custom path, or reply `default` to use `%s`.",
+		LangChinese: "请直接回复自定义路径，或回复 `default` 使用 `%s`。",
+	},
+	MsgNewSessionUseDefault: {
+		LangEnglish: "Use default",
+		LangChinese: "使用默认目录",
+	},
+	MsgNewSessionCreated: {
+		LangEnglish: "✅ New session created: **%s** (id: %s)\n📁 working directory: `%s`",
+		LangChinese: "✅ 新会话已创建：**%s** (id: %s)\n📁 工作目录：`%s`",
 	},
 	MsgHelp: {
 		LangEnglish: "📖 Available Commands\n\n" +
