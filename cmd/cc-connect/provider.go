@@ -62,7 +62,6 @@ func initConfigPath(flagValue string) {
 func runProviderAdd(args []string) {
 	fs := flag.NewFlagSet("provider add", flag.ExitOnError)
 	configFile := fs.String("config", "", "path to config file")
-	project := fs.String("project", "", "project name (required)")
 	name := fs.String("name", "", "provider name (required)")
 	apiKey := fs.String("api-key", "", "API key")
 	baseURL := fs.String("base-url", "", "API base URL (optional)")
@@ -70,8 +69,8 @@ func runProviderAdd(args []string) {
 	envStr := fs.String("env", "", "extra env vars as KEY=VAL,KEY2=VAL2 (optional)")
 	fs.Parse(args)
 
-	if *project == "" || *name == "" {
-		fmt.Fprintln(os.Stderr, "Error: --project and --name are required")
+	if *name == "" {
+		fmt.Fprintln(os.Stderr, "Error: --name is required")
 		fs.Usage()
 		os.Exit(1)
 	}
@@ -93,7 +92,7 @@ func runProviderAdd(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("✅ Provider %q added to project %q\n", *name, *project)
+	fmt.Printf("✅ Provider %q added\n", *name)
 	if *baseURL != "" {
 		fmt.Printf("   Base URL: %s\n", *baseURL)
 	}
@@ -109,74 +108,44 @@ func runProviderAdd(args []string) {
 func runProviderList(args []string) {
 	fs := flag.NewFlagSet("provider list", flag.ExitOnError)
 	configFile := fs.String("config", "", "path to config file")
-	project := fs.String("project", "", "project name (lists all projects if empty)")
 	fs.Parse(args)
 
 	initConfigPath(*configFile)
 
-	if *project != "" {
-		listProjectProviders(*project)
-		return
-	}
-
-	projects, err := config.ListProjects()
+	providers, active, err := config.GetAgentProviders()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	for _, p := range projects {
-		fmt.Printf("── %s ──\n", p)
-		listProjectProviders(p)
-		fmt.Println()
-	}
-}
-
-func listProjectProviders(projectName string) {
-	providers, active, err := config.GetProjectProviders(projectName)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
-	}
-
+	fmt.Println("── agent providers ──")
 	if len(providers) == 0 {
 		fmt.Println("  (no providers)")
-		return
-	}
-
-	for _, p := range providers {
-		marker := "  "
-		if p.Name == active {
-			marker = "▶ "
-		}
-		info := p.Name
-		if p.BaseURL != "" {
-			info += fmt.Sprintf(" (base_url: %s)", p.BaseURL)
-		}
-		if p.Model != "" {
-			info += fmt.Sprintf(" [model: %s]", p.Model)
-		}
-		apiKeyHint := "(not set)"
-		if p.APIKey != "" {
-			if len(p.APIKey) > 8 {
-				apiKeyHint = p.APIKey[:4] + "..." + p.APIKey[len(p.APIKey)-4:]
-			} else {
-				apiKeyHint = "****"
+	} else {
+		for _, p := range providers {
+			marker := " "
+			if p.Name == active {
+				marker = "*"
+			}
+			fmt.Printf("%s %s\n", marker, p.Name)
+			if p.Model != "" {
+				fmt.Printf("    model: %s\n", p.Model)
+			}
+			if p.BaseURL != "" {
+				fmt.Printf("    base_url: %s\n", p.BaseURL)
 			}
 		}
-		fmt.Printf("%s%s  api_key: %s\n", marker, info, apiKeyHint)
 	}
 }
 
 func runProviderRemove(args []string) {
 	fs := flag.NewFlagSet("provider remove", flag.ExitOnError)
 	configFile := fs.String("config", "", "path to config file")
-	project := fs.String("project", "", "project name (required)")
 	name := fs.String("name", "", "provider name (required)")
 	fs.Parse(args)
 
-	if *project == "" || *name == "" {
-		fmt.Fprintln(os.Stderr, "Error: --project and --name are required")
+	if *name == "" {
+		fmt.Fprintln(os.Stderr, "Error: --name is required")
 		fs.Usage()
 		os.Exit(1)
 	}
@@ -188,7 +157,7 @@ func runProviderRemove(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("✅ Provider %q removed from project %q\n", *name, *project)
+	fmt.Printf("✅ Provider %q removed\n", *name)
 }
 
 // ── Import from cc-switch ──────────────────────────────────────
@@ -196,7 +165,6 @@ func runProviderRemove(args []string) {
 func runProviderImport(args []string) {
 	fs := flag.NewFlagSet("provider import", flag.ExitOnError)
 	configFile := fs.String("config", "", "path to config file")
-	project := fs.String("project", "", "target project name (auto-detect if only one)")
 	dbPath := fs.String("db-path", "", "path to cc-switch database (auto-detect)")
 	appType := fs.String("type", "", "filter by agent type: claude or codex (imports all if empty)")
 	fs.Parse(args)
@@ -228,30 +196,7 @@ func runProviderImport(args []string) {
 		os.Exit(1)
 	}
 
-	// Resolve target project
-	targetProject := *project
-	if targetProject == "" {
-		projects, err := config.ListProjects()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading config: %v\n", err)
-			os.Exit(1)
-		}
-		if len(projects) == 1 {
-			targetProject = projects[0]
-		} else if len(projects) == 0 {
-			fmt.Fprintln(os.Stderr, "Error: no projects in config file")
-			os.Exit(1)
-		} else {
-			fmt.Fprintln(os.Stderr, "Error: multiple projects found, specify one with --project:")
-			for _, p := range projects {
-				fmt.Fprintf(os.Stderr, "  - %s\n", p)
-			}
-			os.Exit(1)
-		}
-	}
-
 	fmt.Printf("Importing from: %s\n", db)
-	fmt.Printf("Target project: %s\n\n", targetProject)
 
 	// Query cc-switch database
 	query := "SELECT id, app_type, name, settings_config, is_current FROM providers"

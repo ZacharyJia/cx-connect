@@ -13,15 +13,12 @@ var ConfigPath string
 
 type Config struct {
 	DataDir    string           `toml:"data_dir"` // session store directory, default ~/.cc-connect
-	Agent      AgentConfig     `toml:"agent"`    // global agent config (new format)
-	Platforms  []PlatformConfig `toml:"platforms"` // platform configs (new format)
+	Agent      AgentConfig     `toml:"agent"`    // global agent config
+	Platforms  []PlatformConfig `toml:"platforms"` // platform configs
 	AllowUsers []AllowUser     `toml:"allow_users"`
 	Log        LogConfig       `toml:"log"`
 	Language   string          `toml:"language"` // "en" or "zh", default is "en"
 	Speech     SpeechConfig    `toml:"speech"`
-
-	// Legacy: support old projects-based config
-	Projects []ProjectConfig `toml:"projects"`
 }
 
 // SpeechConfig configures speech-to-text for voice messages.
@@ -40,18 +37,10 @@ type SpeechConfig struct {
 	} `toml:"groq"`
 }
 
-// ProjectConfig binds one agent (with a specific work_dir) to one or more platforms.
-type ProjectConfig struct {
-	Name       string           `toml:"name"`
-	Agent      AgentConfig      `toml:"agent"`
-	Platforms []PlatformConfig `toml:"platforms"`
-	AllowUsers []AllowUser     `toml:"allow_users"`
-}
-
 // AllowUser defines a user that is allowed to access the bot.
 type AllowUser struct {
 	Platform string `toml:"platform"` // "feishu", "telegram", "qq", etc.
-	UserID   string `toml:"user_id"`  // platform-specific user ID
+	UserID   string `toml:"user_id"` // platform-specific user ID
 }
 
 type AgentConfig struct {
@@ -105,40 +94,18 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) validate() error {
-	// Support new single-agent config
-	if c.Agent.Type != "" && len(c.Platforms) > 0 {
-		for j, p := range c.Platforms {
-			if p.Type == "" {
-				return fmt.Errorf("config: platforms[%d].type is required", j)
-			}
-		}
-		return nil
+	if c.Agent.Type == "" {
+		return fmt.Errorf("config: [agent].type is required")
 	}
-
-	// Legacy: support old projects-based config
-	if len(c.Projects) > 0 {
-		for i, proj := range c.Projects {
-			prefix := fmt.Sprintf("projects[%d]", i)
-			if proj.Name == "" {
-				return fmt.Errorf("config: %s.name is required", prefix)
-			}
-			if proj.Agent.Type == "" {
-				return fmt.Errorf("config: %s.agent.type is required", prefix)
-			}
-			if len(proj.Platforms) == 0 {
-				return fmt.Errorf("config: %s needs at least one [[projects.platforms]]", prefix)
-			}
-			for j, p := range proj.Platforms {
-				if p.Type == "" {
-					return fmt.Errorf("config: %s.platforms[%d].type is required", prefix, j)
-				}
-			}
-		}
-		return nil
+	if len(c.Platforms) == 0 {
+		return fmt.Errorf("config: at least one [[platforms]] is required")
 	}
-
-	// Neither new nor legacy config provided
-	return fmt.Errorf("config: either [agent] + [platforms] or [[projects]] is required")
+	for j, p := range c.Platforms {
+		if p.Type == "" {
+			return fmt.Errorf("config: platforms[%d].type is required", j)
+		}
+	}
+	return nil
 }
 
 // SaveActiveProvider persists the active provider name.
@@ -155,25 +122,10 @@ func SaveActiveProvider(providerName string) error {
 		return fmt.Errorf("parse config: %w", err)
 	}
 
-	// Support new global config
-	if cfg.Agent.Type != "" {
-		if cfg.Agent.Options == nil {
-			cfg.Agent.Options = make(map[string]any)
-		}
-		cfg.Agent.Options["provider"] = providerName
-		return saveConfig(cfg)
+	if cfg.Agent.Options == nil {
+		cfg.Agent.Options = make(map[string]any)
 	}
-
-	// Legacy: support old projects config
-	for i := range cfg.Projects {
-		if cfg.Projects[i].Name == "default" {
-			if cfg.Projects[i].Agent.Options == nil {
-				cfg.Projects[i].Agent.Options = make(map[string]any)
-			}
-			cfg.Projects[i].Agent.Options["provider"] = providerName
-			break
-		}
-	}
+	cfg.Agent.Options["provider"] = providerName
 	return saveConfig(cfg)
 }
 
@@ -191,34 +143,12 @@ func AddProviderToConfig(provider ProviderConfig) error {
 		return fmt.Errorf("parse config: %w", err)
 	}
 
-	// Support new global config
-	if cfg.Agent.Type != "" {
-		for _, existing := range cfg.Agent.Providers {
-			if existing.Name == provider.Name {
-				return fmt.Errorf("provider %q already exists", provider.Name)
-			}
-		}
-		cfg.Agent.Providers = append(cfg.Agent.Providers, provider)
-		return saveConfig(cfg)
-	}
-
-	// Legacy: support old projects config
-	found := false
-	for i := range cfg.Projects {
-		if cfg.Projects[i].Name == "default" {
-			for _, existing := range cfg.Projects[i].Agent.Providers {
-				if existing.Name == provider.Name {
-					return fmt.Errorf("provider %q already exists", provider.Name)
-				}
-			}
-			cfg.Projects[i].Agent.Providers = append(cfg.Projects[i].Agent.Providers, provider)
-			found = true
-			break
+	for _, existing := range cfg.Agent.Providers {
+		if existing.Name == provider.Name {
+			return fmt.Errorf("provider %q already exists", provider.Name)
 		}
 	}
-	if !found {
-		return fmt.Errorf("no valid config found")
-	}
+	cfg.Agent.Providers = append(cfg.Agent.Providers, provider)
 	return saveConfig(cfg)
 }
 
@@ -236,37 +166,14 @@ func RemoveProviderFromConfig(providerName string) error {
 		return fmt.Errorf("parse config: %w", err)
 	}
 
-	// Support new global config
-	if cfg.Agent.Type != "" {
-		providers := cfg.Agent.Providers
-		for j := range providers {
-			if providers[j].Name == providerName {
-				cfg.Agent.Providers = append(providers[:j], providers[j+1:]...)
-				return saveConfig(cfg)
-			}
-		}
-		return fmt.Errorf("provider %q not found", providerName)
-	}
-
-	// Legacy: support old projects config
-	found := false
-	for i := range cfg.Projects {
-		if cfg.Projects[i].Name == "default" {
-			providers := cfg.Projects[i].Agent.Providers
-			for j := range providers {
-				if providers[j].Name == providerName {
-					cfg.Projects[i].Agent.Providers = append(providers[:j], providers[j+1:]...)
-					found = true
-					break
-				}
-			}
-			break
+	providers := cfg.Agent.Providers
+	for j := range providers {
+		if providers[j].Name == providerName {
+			cfg.Agent.Providers = append(providers[:j], providers[j+1:]...)
+			return saveConfig(cfg)
 		}
 	}
-	if !found {
-		return fmt.Errorf("provider %q not found", providerName)
-	}
-	return saveConfig(cfg)
+	return fmt.Errorf("provider %q not found", providerName)
 }
 
 func saveConfig(cfg *Config) error {
@@ -295,34 +202,6 @@ func SaveLanguage(lang string) error {
 	return saveConfig(cfg)
 }
 
-// ListProjects returns project names from the config file.
-// Deprecated: use GetAgentProviders instead.
-func ListProjects() ([]string, error) {
-	if ConfigPath == "" {
-		return nil, fmt.Errorf("config path not set")
-	}
-	data, err := os.ReadFile(ConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
-	}
-	cfg := &Config{}
-	if err := toml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
-	}
-
-	// New global config
-	if cfg.Agent.Type != "" {
-		return []string{"default"}, nil
-	}
-
-	// Legacy projects config
-	var names []string
-	for _, p := range cfg.Projects {
-		names = append(names, p.Name)
-	}
-	return names, nil
-}
-
 // GetAgentProviders returns providers for the agent.
 func GetAgentProviders() ([]ProviderConfig, string, error) {
 	if ConfigPath == "" {
@@ -337,24 +216,6 @@ func GetAgentProviders() ([]ProviderConfig, string, error) {
 		return nil, "", fmt.Errorf("parse config: %w", err)
 	}
 
-	// New global config
-	if cfg.Agent.Type != "" {
-		active, _ := cfg.Agent.Options["provider"].(string)
-		return cfg.Agent.Providers, active, nil
-	}
-
-	// Legacy projects config - use first project
-	if len(cfg.Projects) > 0 {
-		p := cfg.Projects[0]
-		active, _ := p.Agent.Options["provider"].(string)
-		return p.Agent.Providers, active, nil
-	}
-
-	return nil, "", fmt.Errorf("no agent config found")
-}
-
-// GetProjectProviders returns providers for a given project.
-// Deprecated: use GetAgentProviders instead.
-func GetProjectProviders(projectName string) ([]ProviderConfig, string, error) {
-	return GetAgentProviders()
+	active, _ := cfg.Agent.Options["provider"].(string)
+	return cfg.Agent.Providers, active, nil
 }
