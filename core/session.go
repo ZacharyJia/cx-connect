@@ -14,6 +14,7 @@ import (
 type Session struct {
 	ID             string         `json:"id"`
 	Name           string         `json:"name"`
+	WorkDir        string         `json:"work_dir"`        // working directory for this session
 	AgentSessionID string         `json:"agent_session_id"`
 	History        []HistoryEntry `json:"history"`
 	CreatedAt      time.Time      `json:"created_at"`
@@ -115,23 +116,24 @@ func (sm *SessionManager) GetOrCreateActive(userKey string) *Session {
 			return s
 		}
 	}
-	return sm.createLocked(userKey, "default")
+	return sm.createLocked(userKey, "default", "")
 }
 
-func (sm *SessionManager) NewSession(userKey, name string) *Session {
+func (sm *SessionManager) NewSession(userKey, name, workDir string) *Session {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	s := sm.createLocked(userKey, name)
+	s := sm.createLocked(userKey, name, workDir)
 	sm.saveLocked()
 	return s
 }
 
-func (sm *SessionManager) createLocked(userKey, name string) *Session {
+func (sm *SessionManager) createLocked(userKey, name, workDir string) *Session {
 	id := sm.nextID()
 	now := time.Now()
 	s := &Session{
 		ID:        id,
 		Name:      name,
+		WorkDir:   workDir,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}

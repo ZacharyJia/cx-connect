@@ -4,10 +4,36 @@
 # Copy this file to config.toml and fill in your credentials.
 # 复制此文件为 config.toml，填入你的凭证信息。
 #
-# Each [[projects]] entry binds one code directory to its own agent + platforms.
-# A single cc-connect process can manage multiple projects simultaneously.
-# 每个 [[projects]] 将一个代码目录绑定到独立的 agent 和平台。
-# 单个 cc-connect 进程可以同时管理多个项目。
+# There are two config formats:
+# 1. New: Single agent + platforms (recommended for single bot)
+#    新格式：单一 Agent + 多个平台（推荐用于单一机器人）
+# 2. Legacy: Multiple projects (for backward compatibility)
+#    旧格式：多个项目（向后兼容）
+#
+# =============================================================================
+# New Format: Single Bot / 新格式：单一机器人
+# =============================================================================
+# This format allows one bot to handle multiple work directories (sessions).
+# You can create new sessions with /new command and switch between them.
+# 这种格式允许一个机器人处理多个工作目录（会话）。
+# 可以使用 /new 命令创建新会话，并在不同会话之间切换。
+
+# [agent]
+# type = "claudecode"
+# mode = "default"
+# model = "claude-sonnet-4-20250514"
+
+# [[platforms]]
+# type = "feishu"
+# [platforms.options]
+# app_id = "your-feishu-app-id"
+# app_secret = "your-feishu-app-secret"
+
+# Allow users whitelist (optional)
+# 允许用户白名单（可选）
+# [[allow_users]]
+# platform = "feishu"
+# user_id = "ou_xxxxxxxx"
 
 # =============================================================================
 # Global Settings / 全局设置

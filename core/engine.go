@@ -465,10 +465,15 @@ func (e *Engine) getOrCreateInteractiveState(sessionKey string, p Platform, repl
 
 	// Inject per-session env vars so the agent subprocess can call `cc-connect cron add` etc.
 	if inj, ok := e.agent.(SessionEnvInjector); ok {
-		inj.SetSessionEnv([]string{
+		env := []string{
 			"CC_PROJECT=" + e.name,
 			"CC_SESSION_KEY=" + sessionKey,
-		})
+		}
+		// Inject session work directory if set
+		if session.WorkDir != "" {
+			env = append(env, "CC_SESSION_DIR="+session.WorkDir)
+		}
+		inj.SetSessionEnv(env)
 	}
 
 	agentSession, err := e.agent.StartSession(e.ctx, session.AgentSessionID)
@@ -678,10 +683,15 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) {
 func (e *Engine) cmdNew(p Platform, msg *Message, args []string) {
 	e.cleanupInteractiveState(msg.SessionKey)
 	name := "session"
+	workDir := ""
 	if len(args) > 0 {
-		name = strings.Join(args, " ")
+		// First arg is session name, rest could be work dir
+		name = args[0]
+		if len(args) > 1 {
+			workDir = args[1]
+		}
 	}
-	s := e.sessions.NewSession(msg.SessionKey, name)
+	s := e.sessions.NewSession(msg.SessionKey, name, workDir)
 	e.reply(p, msg.ReplyCtx,
 		fmt.Sprintf("✅ New session created: %s (id: %s)", s.Name, s.ID))
 }

@@ -92,116 +92,15 @@ func main() {
 
 	setupLogger(cfg.Log.Level)
 
-	engines := make([]*core.Engine, 0, len(cfg.Projects))
+	var engines []*core.Engine
 
-	for _, proj := range cfg.Projects {
-		agent, err := core.CreateAgent(proj.Agent.Type, proj.Agent.Options)
-		if err != nil {
-			slog.Error("failed to create agent", "project", proj.Name, "error", err)
-			os.Exit(1)
-		}
-
-		// Wire providers if the agent supports it
-		if ps, ok := agent.(core.ProviderSwitcher); ok && len(proj.Agent.Providers) > 0 {
-			providers := make([]core.ProviderConfig, len(proj.Agent.Providers))
-			for i, p := range proj.Agent.Providers {
-				providers[i] = core.ProviderConfig{
-					Name:    p.Name,
-					APIKey:  p.APIKey,
-					BaseURL: p.BaseURL,
-					Model:   p.Model,
-					Env:     p.Env,
-				}
-			}
-			ps.SetProviders(providers)
-			if active, _ := proj.Agent.Options["provider"].(string); active != "" {
-				ps.SetActiveProvider(active)
-			}
-		}
-
-		var platforms []core.Platform
-		for _, pc := range proj.Platforms {
-			p, err := core.CreatePlatform(pc.Type, pc.Options)
-			if err != nil {
-				slog.Error("failed to create platform", "project", proj.Name, "type", pc.Type, "error", err)
-				os.Exit(1)
-			}
-			platforms = append(platforms, p)
-		}
-
-		workDir, _ := proj.Agent.Options["work_dir"].(string)
-		sessionFile := sessionStorePath(cfg.DataDir, proj.Name, workDir)
-
-		// Parse language setting
-		var lang core.Language
-		switch cfg.Language {
-		case "zh", "chinese":
-			lang = core.LangChinese
-		case "en", "english":
-			lang = core.LangEnglish
-		default:
-			lang = core.LangAuto // auto-detect
-		}
-
-		engine := core.NewEngine(proj.Name, agent, platforms, sessionFile, lang, proj.AllowUsers)
-
-		// Wire speech-to-text if enabled
-		if cfg.Speech.Enabled {
-			speechCfg := core.SpeechCfg{
-				Enabled:  true,
-				Language: cfg.Speech.Language,
-			}
-			switch cfg.Speech.Provider {
-			case "groq":
-				apiKey := cfg.Speech.Groq.APIKey
-				model := cfg.Speech.Groq.Model
-				if model == "" {
-					model = "whisper-large-v3-turbo"
-				}
-				if apiKey != "" {
-					speechCfg.STT = core.NewOpenAIWhisper(apiKey, "https://api.groq.com/openai/v1", model)
-				} else {
-					slog.Warn("speech: groq provider enabled but api_key is empty")
-				}
-			default: // "openai" or unspecified
-				apiKey := cfg.Speech.OpenAI.APIKey
-				baseURL := cfg.Speech.OpenAI.BaseURL
-				model := cfg.Speech.OpenAI.Model
-				if apiKey != "" {
-					speechCfg.STT = core.NewOpenAIWhisper(apiKey, baseURL, model)
-				} else {
-					slog.Warn("speech: openai provider enabled but api_key is empty")
-				}
-			}
-			if speechCfg.STT != nil {
-				engine.SetSpeechConfig(speechCfg)
-				slog.Info("speech: enabled", "provider", cfg.Speech.Provider)
-			}
-		}
-
-		// Set up save callback for auto-detected language
-		if lang == core.LangAuto {
-			engine.SetLanguageSaveFunc(func(l core.Language) error {
-				return config.SaveLanguage(string(l))
-			})
-		}
-
-		// Set up save callbacks for provider management
-		projName := proj.Name
-		engine.SetProviderSaveFunc(func(providerName string) error {
-			return config.SaveActiveProvider(projName, providerName)
-		})
-		engine.SetProviderAddSaveFunc(func(p core.ProviderConfig) error {
-			return config.AddProviderToConfig(projName, config.ProviderConfig{
-				Name: p.Name, APIKey: p.APIKey, BaseURL: p.BaseURL,
-				Model: p.Model, Env: p.Env,
-			})
-		})
-		engine.SetProviderRemoveSaveFunc(func(name string) error {
-			return config.RemoveProviderFromConfig(projName, name)
-		})
-
-		engines = append(engines, engine)
+	// Check if using new single-agent config
+	if cfg.Agent.Type != "" && len(cfg.Platforms) > 0 {
+		// New config format: single agent + platforms
+		engines = createEnginesFromConfig(cfg)
+	} else {
+		// Legacy config format: multiple projects
+		engines = createEnginesFromProjects(cfg)
 	}
 
 	// Start cron scheduler
@@ -213,7 +112,8 @@ func main() {
 	if cronStore != nil {
 		cronSched = core.NewCronScheduler(cronStore)
 		for i, e := range engines {
-			cronSched.RegisterEngine(cfg.Projects[i].Name, e)
+			name := getEngineName(cfg, i)
+			cronSched.RegisterEngine(name, e)
 			e.SetCronScheduler(cronSched)
 		}
 	}
@@ -237,7 +137,8 @@ func main() {
 		slog.Warn("api server unavailable", "error", err)
 	} else {
 		for i, e := range engines {
-			apiSrv.RegisterEngine(cfg.Projects[i].Name, e)
+			name := getEngineName(cfg, i)
+			apiSrv.RegisterEngine(name, e)
 		}
 		if cronSched != nil {
 			apiSrv.SetCronScheduler(cronSched)
@@ -245,7 +146,7 @@ func main() {
 		apiSrv.Start()
 	}
 
-	slog.Info("cc-connect is running", "projects", len(engines))
+	slog.Info("cc-connect is running", "engines", len(engines))
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -348,6 +249,247 @@ app_secret = "your-feishu-app-secret"
 # see: https://github.com/chenhg5/cc-connect/blob/main/config.example.toml
 `
 	return os.WriteFile(path, []byte(tmpl), 0o644)
+}
+
+// getEngineName returns the name for an engine at the given index.
+// For new config format, it's "default". For legacy, it uses project name.
+func getEngineName(cfg *config.Config, index int) string {
+	if cfg.Agent.Type != "" {
+		return "default"
+	}
+	if index < len(cfg.Projects) {
+		return cfg.Projects[index].Name
+	}
+	return "default"
+}
+
+// createEnginesFromConfig creates engines from the new single-agent config.
+func createEnginesFromConfig(cfg *config.Config) []*core.Engine {
+	var engines []*core.Engine
+
+	agent, err := core.CreateAgent(cfg.Agent.Type, cfg.Agent.Options)
+	if err != nil {
+		slog.Error("failed to create agent", "error", err)
+		os.Exit(1)
+	}
+
+	// Wire providers if the agent supports it
+	if ps, ok := agent.(core.ProviderSwitcher); ok && len(cfg.Agent.Providers) > 0 {
+		providers := make([]core.ProviderConfig, len(cfg.Agent.Providers))
+		for i, p := range cfg.Agent.Providers {
+			providers[i] = core.ProviderConfig{
+				Name:    p.Name,
+				APIKey:  p.APIKey,
+				BaseURL: p.BaseURL,
+				Model:   p.Model,
+				Env:     p.Env,
+			}
+		}
+		ps.SetProviders(providers)
+		if active, _ := cfg.Agent.Options["provider"].(string); active != "" {
+			ps.SetActiveProvider(active)
+		}
+	}
+
+	var platforms []core.Platform
+	for _, pc := range cfg.Platforms {
+		p, err := core.CreatePlatform(pc.Type, pc.Options)
+		if err != nil {
+			slog.Error("failed to create platform", "type", pc.Type, "error", err)
+			os.Exit(1)
+		}
+		platforms = append(platforms, p)
+	}
+
+	// Session file path - use "default" for single agent
+	sessionFile := sessionStorePath(cfg.DataDir, "default", "")
+
+	// Parse language setting
+	var lang core.Language
+	switch cfg.Language {
+	case "zh", "chinese":
+		lang = core.LangChinese
+	case "en", "english":
+		lang = core.LangEnglish
+	default:
+		lang = core.LangAuto
+	}
+
+	engine := core.NewEngine("default", agent, platforms, sessionFile, lang, cfg.AllowUsers)
+
+	// Wire speech-to-text if enabled
+	if cfg.Speech.Enabled {
+		speechCfg := core.SpeechCfg{
+			Enabled:  true,
+			Language: cfg.Speech.Language,
+		}
+		switch cfg.Speech.Provider {
+		case "groq":
+			apiKey := cfg.Speech.Groq.APIKey
+			model := cfg.Speech.Groq.Model
+			if model == "" {
+				model = "whisper-large-v3-turbo"
+			}
+			if apiKey != "" {
+				speechCfg.STT = core.NewOpenAIWhisper(apiKey, "https://api.groq.com/openai/v1", model)
+			} else {
+				slog.Warn("speech: groq provider enabled but api_key is empty")
+			}
+		default:
+			apiKey := cfg.Speech.OpenAI.APIKey
+			baseURL := cfg.Speech.OpenAI.BaseURL
+			model := cfg.Speech.OpenAI.Model
+			if apiKey != "" {
+				speechCfg.STT = core.NewOpenAIWhisper(apiKey, baseURL, model)
+			} else {
+				slog.Warn("speech: openai provider enabled but api_key is empty")
+			}
+		}
+		if speechCfg.STT != nil {
+			engine.SetSpeechConfig(speechCfg)
+			slog.Info("speech: enabled", "provider", cfg.Speech.Provider)
+		}
+	}
+
+	// Set up save callback for auto-detected language
+	if lang == core.LangAuto {
+		engine.SetLanguageSaveFunc(func(l core.Language) error {
+			return config.SaveLanguage(string(l))
+		})
+	}
+
+	// Set up save callbacks for provider management
+	engine.SetProviderSaveFunc(func(providerName string) error {
+		return config.SaveActiveProvider(providerName)
+	})
+	engine.SetProviderAddSaveFunc(func(p core.ProviderConfig) error {
+		return config.AddProviderToConfig(config.ProviderConfig{
+			Name: p.Name, APIKey: p.APIKey, BaseURL: p.BaseURL,
+			Model: p.Model, Env: p.Env,
+		})
+	})
+	engine.SetProviderRemoveSaveFunc(func(name string) error {
+		return config.RemoveProviderFromConfig(name)
+	})
+
+	engines = append(engines, engine)
+	return engines
+}
+
+// createEnginesFromProjects creates engines from the legacy projects config.
+func createEnginesFromProjects(cfg *config.Config) []*core.Engine {
+	var engines []*core.Engine
+
+	for _, proj := range cfg.Projects {
+		agent, err := core.CreateAgent(proj.Agent.Type, proj.Agent.Options)
+		if err != nil {
+			slog.Error("failed to create agent", "project", proj.Name, "error", err)
+			os.Exit(1)
+		}
+
+		// Wire providers if the agent supports it
+		if ps, ok := agent.(core.ProviderSwitcher); ok && len(proj.Agent.Providers) > 0 {
+			providers := make([]core.ProviderConfig, len(proj.Agent.Providers))
+			for i, p := range proj.Agent.Providers {
+				providers[i] = core.ProviderConfig{
+					Name:    p.Name,
+					APIKey:  p.APIKey,
+					BaseURL: p.BaseURL,
+					Model:   p.Model,
+					Env:     p.Env,
+				}
+			}
+			ps.SetProviders(providers)
+			if active, _ := proj.Agent.Options["provider"].(string); active != "" {
+				ps.SetActiveProvider(active)
+			}
+		}
+
+		var platforms []core.Platform
+		for _, pc := range proj.Platforms {
+			p, err := core.CreatePlatform(pc.Type, pc.Options)
+			if err != nil {
+				slog.Error("failed to create platform", "project", proj.Name, "type", pc.Type, "error", err)
+				os.Exit(1)
+			}
+			platforms = append(platforms, p)
+		}
+
+		workDir, _ := proj.Agent.Options["work_dir"].(string)
+		sessionFile := sessionStorePath(cfg.DataDir, proj.Name, workDir)
+
+		// Parse language setting
+		var lang core.Language
+		switch cfg.Language {
+		case "zh", "chinese":
+			lang = core.LangChinese
+		case "en", "english":
+			lang = core.LangEnglish
+		default:
+			lang = core.LangAuto
+		}
+
+		engine := core.NewEngine(proj.Name, agent, platforms, sessionFile, lang, proj.AllowUsers)
+
+		// Wire speech-to-text if enabled
+		if cfg.Speech.Enabled {
+			speechCfg := core.SpeechCfg{
+				Enabled:  true,
+				Language: cfg.Speech.Language,
+			}
+			switch cfg.Speech.Provider {
+			case "groq":
+				apiKey := cfg.Speech.Groq.APIKey
+				model := cfg.Speech.Groq.Model
+				if model == "" {
+					model = "whisper-large-v3-turbo"
+				}
+				if apiKey != "" {
+					speechCfg.STT = core.NewOpenAIWhisper(apiKey, "https://api.groq.com/openai/v1", model)
+				} else {
+					slog.Warn("speech: groq provider enabled but api_key is empty")
+				}
+			default:
+				apiKey := cfg.Speech.OpenAI.APIKey
+				baseURL := cfg.Speech.OpenAI.BaseURL
+				model := cfg.Speech.OpenAI.Model
+				if apiKey != "" {
+					speechCfg.STT = core.NewOpenAIWhisper(apiKey, baseURL, model)
+				} else {
+					slog.Warn("speech: openai provider enabled but api_key is empty")
+				}
+			}
+			if speechCfg.STT != nil {
+				engine.SetSpeechConfig(speechCfg)
+				slog.Info("speech: enabled", "provider", cfg.Speech.Provider)
+			}
+		}
+
+		// Set up save callback for auto-detected language
+		if lang == core.LangAuto {
+			engine.SetLanguageSaveFunc(func(l core.Language) error {
+				return config.SaveLanguage(string(l))
+			})
+		}
+
+		// Set up save callbacks for provider management
+		engine.SetProviderSaveFunc(func(providerName string) error {
+			return config.SaveActiveProvider(providerName)
+		})
+		engine.SetProviderAddSaveFunc(func(p core.ProviderConfig) error {
+			return config.AddProviderToConfig(config.ProviderConfig{
+				Name: p.Name, APIKey: p.APIKey, BaseURL: p.BaseURL,
+				Model: p.Model, Env: p.Env,
+			})
+		})
+		engine.SetProviderRemoveSaveFunc(func(name string) error {
+			return config.RemoveProviderFromConfig(name)
+		})
+
+		engines = append(engines, engine)
+	}
+
+	return engines
 }
 
 func setupLogger(level string) {

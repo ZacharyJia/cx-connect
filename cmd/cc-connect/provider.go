@@ -88,7 +88,7 @@ func runProviderAdd(args []string) {
 		p.Env = parseEnvStr(*envStr)
 	}
 
-	if err := config.AddProviderToConfig(*project, p); err != nil {
+	if err := config.AddProviderToConfig(p); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -183,7 +183,7 @@ func runProviderRemove(args []string) {
 
 	initConfigPath(*configFile)
 
-	if err := config.RemoveProviderFromConfig(*project, *name); err != nil {
+	if err := config.RemoveProviderFromConfig(*name); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -290,7 +290,7 @@ func runProviderImport(args []string) {
 			continue
 		}
 
-		if err := config.AddProviderToConfig(targetProject, provider); err != nil {
+		if err := config.AddProviderToConfig(provider); err != nil {
 			if strings.Contains(err.Error(), "already exists") {
 				fmt.Printf("  ⏭ Skip %q: already exists\n", provider.Name)
 				skipped++

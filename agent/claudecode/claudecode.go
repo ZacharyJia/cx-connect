@@ -102,6 +102,16 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	model := a.model
 	extraEnv := a.providerEnvLocked()
 	extraEnv = append(extraEnv, a.sessionEnv...)
+
+	// Check for per-session work directory (CC_SESSION_DIR)
+	workDir := a.workDir
+	for _, env := range a.sessionEnv {
+		if strings.HasPrefix(env, "CC_SESSION_DIR=") {
+			workDir = strings.TrimPrefix(env, "CC_SESSION_DIR=")
+			break
+		}
+	}
+
 	if a.activeIdx >= 0 && a.activeIdx < len(a.providers) {
 		if m := a.providers[a.activeIdx].Model; m != "" {
 			model = m
@@ -109,7 +119,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	}
 	a.mu.Unlock()
 
-	return newClaudeSession(ctx, a.workDir, model, sessionID, a.mode, tools, extraEnv)
+	return newClaudeSession(ctx, workDir, model, sessionID, a.mode, tools, extraEnv)
 }
 
 func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, error) {
