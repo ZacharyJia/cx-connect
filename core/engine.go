@@ -989,6 +989,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) {
 		e.cmdQuiet(p, msg)
 	case "/provider":
 		e.cmdProvider(p, msg, args)
+	case "/memory":
+		e.cmdMemory(p, msg, args)
 	case "/cron":
 		e.cmdCron(p, msg, args)
 	case "/stop":
@@ -1865,6 +1867,113 @@ func (e *Engine) formatDisplayPath(abs string) string {
 		return "~" + string(filepath.Separator) + strings.TrimPrefix(abs, prefix)
 	}
 	return abs
+}
+
+// ──────────────────────────────────────────────────────────────
+// /memory command
+// ──────────────────────────────────────────────────────────────
+
+func (e *Engine) cmdMemory(p Platform, msg *Message, args []string) {
+	mp, ok := e.agent.(MemoryFileProvider)
+	if !ok {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgMemoryNotSupported))
+		return
+	}
+
+	if len(args) == 0 {
+		// /memory — show project memory
+		e.showMemoryFile(p, msg, mp.ProjectMemoryFile(), false)
+		return
+	}
+
+	sub := strings.ToLower(args[0])
+	switch sub {
+	case "add":
+		text := strings.TrimSpace(strings.Join(args[1:], " "))
+		if text == "" {
+			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgMemoryAddUsage))
+			return
+		}
+		e.appendMemoryFile(p, msg, mp.ProjectMemoryFile(), text)
+
+	case "global":
+		if len(args) == 1 {
+			// /memory global — show global memory
+			e.showMemoryFile(p, msg, mp.GlobalMemoryFile(), true)
+			return
+		}
+		if strings.ToLower(args[1]) == "add" {
+			text := strings.TrimSpace(strings.Join(args[2:], " "))
+			if text == "" {
+				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgMemoryAddUsage))
+				return
+			}
+			e.appendMemoryFile(p, msg, mp.GlobalMemoryFile(), text)
+		} else {
+			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgMemoryAddUsage))
+		}
+
+	case "show":
+		e.showMemoryFile(p, msg, mp.ProjectMemoryFile(), false)
+
+	case "help", "--help", "-h":
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgMemoryAddUsage))
+
+	default:
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgMemoryAddUsage))
+	}
+}
+
+func (e *Engine) showMemoryFile(p Platform, msg *Message, filePath string, isGlobal bool) {
+	if filePath == "" {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgMemoryNotSupported))
+		return
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgMemoryEmpty), filePath))
+		return
+	}
+
+	content := string(data)
+	if len([]rune(content)) > 2000 {
+		content = string([]rune(content)[:2000]) + "\n\n... (truncated)"
+	}
+
+	if isGlobal {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgMemoryShowGlobal), filePath, content))
+	} else {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgMemoryShowProject), filePath, content))
+	}
+}
+
+func (e *Engine) appendMemoryFile(p Platform, msg *Message, filePath, text string) {
+	if filePath == "" {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgMemoryNotSupported))
+		return
+	}
+
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgMemoryAddFailed), err))
+		return
+	}
+
+	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgMemoryAddFailed), err))
+		return
+	}
+	defer f.Close()
+
+	entry := "\n- " + text + "\n"
+	if _, err := f.WriteString(entry); err != nil {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgMemoryAddFailed), err))
+		return
+	}
+
+	e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgMemoryAdded), filePath))
 }
 
 // ──────────────────────────────────────────────────────────────

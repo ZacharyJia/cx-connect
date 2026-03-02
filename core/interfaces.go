@@ -114,6 +114,14 @@ type ProviderSwitcher interface {
 	ListProviders() []ProviderConfig
 }
 
+// MemoryFileProvider is an optional interface for agents that support
+// persistent instruction files (CLAUDE.md, AGENTS.md, GEMINI.md, etc.).
+// The engine uses these paths for the /memory command.
+type MemoryFileProvider interface {
+	ProjectMemoryFile() string // project-level instruction file (e.g., <work_dir>/CLAUDE.md)
+	GlobalMemoryFile() string  // user-level instruction file (e.g., ~/.claude/CLAUDE.md)
+}
+
 // ModeSwitcher is an optional interface for agents that support runtime permission mode switching.
 type ModeSwitcher interface {
 	SetMode(mode string)

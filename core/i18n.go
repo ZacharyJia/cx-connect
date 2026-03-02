@@ -158,6 +158,14 @@ const (
 	MsgCronDisabled     MsgKey = "cron_disabled"
 
 	MsgUserNotAllowed MsgKey = "user_not_allowed"
+
+	MsgMemoryNotSupported MsgKey = "memory_not_supported"
+	MsgMemoryShowProject  MsgKey = "memory_show_project"
+	MsgMemoryShowGlobal   MsgKey = "memory_show_global"
+	MsgMemoryEmpty        MsgKey = "memory_empty"
+	MsgMemoryAdded        MsgKey = "memory_added"
+	MsgMemoryAddFailed    MsgKey = "memory_add_failed"
+	MsgMemoryAddUsage     MsgKey = "memory_add_usage"
 )
 
 var messages = map[MsgKey]map[Language]string{
@@ -297,6 +305,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/current\n  Show current active session\n\n" +
 			"/history [n]\n  Show last n messages (default 10)\n\n" +
 			"/provider [list|add|remove|switch]\n  Manage API providers\n\n" +
+			"/memory [add|global|global add]\n  View/edit agent memory files\n\n" +
 			"/allow <tool>\n  Pre-allow a tool (next session)\n\n" +
 			"/mode [name]\n  View/switch permission mode\n\n" +
 			"/output [concise|verbose|quiet]\n  View/switch output verbosity\n\n" +
@@ -314,6 +323,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/current\n  查看当前活跃会话\n\n" +
 			"/history [n]\n  查看最近 n 条消息（默认 10）\n\n" +
 			"/provider [list|add|remove|switch]\n  管理 API Provider\n\n" +
+			"/memory [add|global|global add]\n  查看/编辑 Agent 记忆文件\n\n" +
 			"/allow <工具名>\n  预授权工具（下次会话生效）\n\n" +
 			"/mode [名称]\n  查看/切换权限模式\n\n" +
 			"/output [concise|verbose|quiet]\n  查看/切换输出模式\n\n" +
@@ -483,6 +493,42 @@ var messages = map[MsgKey]map[Language]string{
 	MsgUserNotAllowed: {
 		LangEnglish: "You are not authorized to use this bot. Please contact the administrator.",
 		LangChinese: "您没有使用此机器人的权限，请联系管理员。",
+	},
+	MsgMemoryNotSupported: {
+		LangEnglish: "This agent does not support memory files.",
+		LangChinese: "当前 Agent 不支持记忆文件。",
+	},
+	MsgMemoryShowProject: {
+		LangEnglish: "📝 **Project Memory** (`%s`)\n\n%s",
+		LangChinese: "📝 **项目记忆** (`%s`)\n\n%s",
+	},
+	MsgMemoryShowGlobal: {
+		LangEnglish: "📝 **Global Memory** (`%s`)\n\n%s",
+		LangChinese: "📝 **全局记忆** (`%s`)\n\n%s",
+	},
+	MsgMemoryEmpty: {
+		LangEnglish: "📝 `%s`\n\n(empty — no content yet)",
+		LangChinese: "📝 `%s`\n\n（空 — 尚无内容）",
+	},
+	MsgMemoryAdded: {
+		LangEnglish: "✅ Added to `%s`",
+		LangChinese: "✅ 已追加到 `%s`",
+	},
+	MsgMemoryAddFailed: {
+		LangEnglish: "❌ Failed to write memory file: %v",
+		LangChinese: "❌ 写入记忆文件失败: %v",
+	},
+	MsgMemoryAddUsage: {
+		LangEnglish: "Usage:\n" +
+			"`/memory` — show project memory\n" +
+			"`/memory add <text>` — add to project memory\n" +
+			"`/memory global` — show global memory\n" +
+			"`/memory global add <text>` — add to global memory",
+		LangChinese: "用法：\n" +
+			"`/memory` — 查看项目记忆\n" +
+			"`/memory add <文本>` — 追加到项目记忆\n" +
+			"`/memory global` — 查看全局记忆\n" +
+			"`/memory global add <文本>` — 追加到全局记忆",
 	},
 }
 

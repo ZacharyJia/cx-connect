@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -112,6 +114,28 @@ func (a *Agent) GetMode() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.mode
+}
+
+// ── MemoryFileProvider implementation ─────────────────────────
+
+func (a *Agent) ProjectMemoryFile() string {
+	absDir, err := filepath.Abs(a.workDir)
+	if err != nil {
+		absDir = a.workDir
+	}
+	return filepath.Join(absDir, "AGENTS.md")
+}
+
+func (a *Agent) GlobalMemoryFile() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	codexHome := os.Getenv("CODEX_HOME")
+	if codexHome == "" {
+		codexHome = filepath.Join(homeDir, ".codex")
+	}
+	return filepath.Join(codexHome, "AGENTS.md")
 }
 
 // ── ProviderSwitcher implementation ──────────────────────────

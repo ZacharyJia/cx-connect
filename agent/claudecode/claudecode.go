@@ -268,6 +268,24 @@ func (a *Agent) GetAllowedTools() []string {
 	return result
 }
 
+// ── MemoryFileProvider implementation ─────────────────────────
+
+func (a *Agent) ProjectMemoryFile() string {
+	absDir, err := filepath.Abs(a.workDir)
+	if err != nil {
+		absDir = a.workDir
+	}
+	return filepath.Join(absDir, "CLAUDE.md")
+}
+
+func (a *Agent) GlobalMemoryFile() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(homeDir, ".claude", "CLAUDE.md")
+}
+
 // ── ProviderSwitcher implementation ──────────────────────────
 
 func (a *Agent) SetProviders(providers []core.ProviderConfig) {

@@ -135,6 +135,24 @@ func (a *Agent) PermissionModes() []core.PermissionModeInfo {
 	}
 }
 
+// ── MemoryFileProvider implementation ─────────────────────────
+
+func (a *Agent) ProjectMemoryFile() string {
+	absDir, err := filepath.Abs(a.workDir)
+	if err != nil {
+		absDir = a.workDir
+	}
+	return filepath.Join(absDir, "GEMINI.md")
+}
+
+func (a *Agent) GlobalMemoryFile() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(homeDir, ".gemini", "GEMINI.md")
+}
+
 // ── ProviderSwitcher ────────────────────────────────────────────
 
 func (a *Agent) SetProviders(providers []core.ProviderConfig) {
