@@ -255,12 +255,12 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		return
 	}
 
-	if len(msg.Images) == 0 && strings.HasPrefix(content, "/") {
-		e.handleCommand(p, msg, content)
+	if e.handlePendingNewSession(p, msg, content) {
 		return
 	}
 
-	if e.handlePendingNewSession(p, msg, content) {
+	if len(msg.Images) == 0 && strings.HasPrefix(content, "/") {
+		e.handleCommand(p, msg, content)
 		return
 	}
 
@@ -401,6 +401,10 @@ func (e *Engine) handlePendingNewSession(p Platform, msg *Message, content strin
 	if !ok || pending == nil {
 		return false
 	}
+	if isKnownSlashCommand(content) {
+		// Let explicit bot commands pass through while waiting for workdir input.
+		return false
+	}
 
 	workDir, displayDir, err := e.resolveSessionWorkDir(pending.Name, content)
 	if err != nil {
@@ -443,6 +447,22 @@ func isDenyResponse(s string) bool {
 		}
 	}
 	return false
+}
+
+func isKnownSlashCommand(content string) bool {
+	parts := strings.Fields(strings.TrimSpace(content))
+	if len(parts) == 0 {
+		return false
+	}
+	cmd := strings.ToLower(parts[0])
+	switch cmd {
+	case "/new", "/list", "/sessions", "/switch", "/current", "/history",
+		"/allow", "/mode", "/lang", "/quiet", "/provider", "/cron", "/stop",
+		"/help", "/version":
+		return true
+	default:
+		return false
+	}
 }
 
 // ──────────────────────────────────────────────────────────────
