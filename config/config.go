@@ -37,9 +37,16 @@ type SpeechConfig struct {
 
 // ProjectConfig binds one agent (with a specific work_dir) to one or more platforms.
 type ProjectConfig struct {
-	Name      string           `toml:"name"`
-	Agent     AgentConfig      `toml:"agent"`
+	Name       string           `toml:"name"`
+	Agent      AgentConfig      `toml:"agent"`
 	Platforms []PlatformConfig `toml:"platforms"`
+	AllowUsers []AllowUser     `toml:"allow_users"`
+}
+
+// AllowUser defines a user that is allowed to access the bot.
+type AllowUser struct {
+	Platform string `toml:"platform"` // "feishu", "telegram", "qq", etc.
+	UserID   string `toml:"user_id"`  // platform-specific user ID
 }
 
 type AgentConfig struct {

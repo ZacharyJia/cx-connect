@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/chenhg5/cc-connect/config"
 )
 
 const maxPlatformMessageLen = 4000
@@ -27,6 +29,7 @@ type Engine struct {
 	cancel    context.CancelFunc
 	i18n      *I18n
 	speech    SpeechCfg
+	allowUsers map[string]bool // key = "platform:user_id"
 
 	providerSaveFunc       func(providerName string) error
 	providerAddSaveFunc    func(p ProviderConfig) error
@@ -59,8 +62,16 @@ type pendingPermission struct {
 	Resolved     chan struct{} // closed when user responds
 }
 
-func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath string, lang Language) *Engine {
+func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath string, lang Language, allowUsers []config.AllowUser) *Engine {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Build whitelist map
+	allowUsersMap := make(map[string]bool)
+	for _, u := range allowUsers {
+		key := u.Platform + ":" + u.UserID
+		allowUsersMap[key] = true
+	}
+
 	return &Engine{
 		name:              name,
 		agent:             ag,
@@ -70,7 +81,18 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		cancel:            cancel,
 		i18n:              NewI18n(lang),
 		interactiveStates: make(map[string]*interactiveState),
+		allowUsers:        allowUsersMap,
 	}
+}
+
+// isAllowedUser checks if a user is allowed to use the bot.
+// Returns true if no whitelist is configured (backward compatibility).
+func (e *Engine) isAllowedUser(platform, userID string) bool {
+	if len(e.allowUsers) == 0 {
+		return true
+	}
+	key := platform + ":" + userID
+	return e.allowUsers[key]
 }
 
 // SetSpeechConfig configures the speech-to-text subsystem.
@@ -197,6 +219,17 @@ func (e *Engine) Stop() error {
 }
 
 func (e *Engine) handleMessage(p Platform, msg *Message) {
+	// Check whitelist
+	if !e.isAllowedUser(msg.Platform, msg.UserID) {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgUserNotAllowed))
+		slog.Warn("user not in whitelist",
+			"platform", msg.Platform,
+			"user_id", msg.UserID,
+			"user_name", msg.UserName,
+		)
+		return
+	}
+
 	// Voice message: transcribe to text first
 	if msg.Audio != nil {
 		e.handleVoiceMessage(p, msg)

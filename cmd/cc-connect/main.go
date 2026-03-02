@@ -143,7 +143,7 @@ func main() {
 			lang = core.LangAuto // auto-detect
 		}
 
-		engine := core.NewEngine(proj.Name, agent, platforms, sessionFile, lang)
+		engine := core.NewEngine(proj.Name, agent, platforms, sessionFile, lang, proj.AllowUsers)
 
 		// Wire speech-to-text if enabled
 		if cfg.Speech.Enabled {

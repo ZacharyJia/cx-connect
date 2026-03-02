@@ -150,6 +150,8 @@ const (
 	MsgCronNotFound     MsgKey = "cron_not_found"
 	MsgCronEnabled      MsgKey = "cron_enabled"
 	MsgCronDisabled     MsgKey = "cron_disabled"
+
+	MsgUserNotAllowed MsgKey = "user_not_allowed"
 )
 
 var messages = map[MsgKey]map[Language]string{
@@ -444,6 +446,11 @@ var messages = map[MsgKey]map[Language]string{
 	MsgCronDisabled: {
 		LangEnglish: "⏸ Cron job `%s` disabled.",
 		LangChinese: "⏸ 定时任务 `%s` 已暂停。",
+	},
+
+	MsgUserNotAllowed: {
+		LangEnglish: "You are not authorized to use this bot. Please contact the administrator.",
+		LangChinese: "您没有使用此机器人的权限，请联系管理员。",
 	},
 }
 

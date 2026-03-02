@@ -106,6 +106,20 @@ mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "bypassPermission
 # name = "bedrock"
 # env = { CLAUDE_CODE_USE_BEDROCK = "1", AWS_PROFILE = "bedrock" }
 
+# Allow Users Whitelist / 允许用户白名单
+# Only users in this list can interact with the bot.
+# If not specified (empty), all users are allowed.
+# 只有在白名单中的用户才能与机器人交互。
+# 如果未指定（留空），则允许所有用户。
+#
+# [[projects.allow_users]]
+# platform = "feishu"      # platform: feishu, telegram, qq, slack, discord, dingtalk
+# user_id = "ou_xxxxxxxx"  # platform-specific user ID
+#
+# [[projects.allow_users]]
+# platform = "telegram"
+# user_id = "123456789"
+
 # Feishu / Lark / 飞书
 # 1. Create an app at https://open.feishu.cn / 在 https://open.feishu.cn 创建应用
 # 2. Enable Bot capability / 开启机器人能力
