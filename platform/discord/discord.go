@@ -126,39 +126,66 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 	})
 
 	session.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if i.Type != discordgo.InteractionApplicationCommand {
-			return
-		}
-		data := i.ApplicationCommandData()
-		if data.Name == "" {
-			return
-		}
-
-		if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		}); err != nil {
-			slog.Error("discord: failed to acknowledge interaction", "command", data.Name, "error", err)
-			return
-		}
-
 		userID, userName := interactionUser(i)
-		content := "/" + data.Name
-		if args := parseInteractionArgs(data.Options); args != "" {
-			content += " " + args
-		}
-
-		msg := &core.Message{
+		base := &core.Message{
 			SessionKey: fmt.Sprintf("discord:%s:%s", i.ChannelID, userID),
 			Platform:   "discord",
 			UserID:     userID,
 			UserName:   userName,
-			Content:    content,
-			ReplyCtx: replyContext{
+		}
+
+		switch i.Type {
+		case discordgo.InteractionApplicationCommand:
+			data := i.ApplicationCommandData()
+			if data.Name == "" {
+				return
+			}
+
+			if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+			}); err != nil {
+				slog.Error("discord: failed to acknowledge interaction", "command", data.Name, "error", err)
+				return
+			}
+
+			content := "/" + data.Name
+			if args := parseInteractionArgs(data.Options); args != "" {
+				content += " " + args
+			}
+
+			base.Content = content
+			base.ReplyCtx = replyContext{
 				channelID:   i.ChannelID,
 				interaction: i.Interaction,
-			},
+			}
+			p.handler(p, base)
+
+		case discordgo.InteractionMessageComponent:
+			data := i.MessageComponentData()
+			customID := strings.TrimSpace(data.CustomID)
+			if customID == "" {
+				return
+			}
+
+			if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseDeferredMessageUpdate,
+			}); err != nil {
+				slog.Error("discord: failed to acknowledge component interaction", "custom_id", customID, "error", err)
+				return
+			}
+
+			messageID := ""
+			if i.Message != nil {
+				messageID = i.Message.ID
+			}
+
+			base.Content = customID
+			base.ReplyCtx = replyContext{
+				channelID: i.ChannelID,
+				messageID: messageID,
+			}
+			p.handler(p, base)
 		}
-		p.handler(p, msg)
 	})
 
 	if err := session.Open(); err != nil {
@@ -207,9 +234,59 @@ func (p *Platform) Reply(ctx context.Context, rctx any, content string) error {
 	return nil
 }
 
-// ReplyWithButtons is not supported in Discord
 func (p *Platform) ReplyWithButtons(ctx context.Context, rctx any, content string, buttons []core.Button) error {
-	return core.ErrNotSupported
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return fmt.Errorf("discord: invalid reply context type %T", rctx)
+	}
+
+	components := buildDiscordButtonComponents(buttons)
+	first := true
+
+	// Keep button components on the first chunk only.
+	for len(content) > 0 {
+		chunk := content
+		if len(chunk) > maxDiscordLen {
+			cut := maxDiscordLen
+			if idx := lastIndexBefore(content, '\n', cut); idx > 0 {
+				cut = idx + 1
+			}
+			chunk = content[:cut]
+			content = content[cut:]
+		} else {
+			content = ""
+		}
+
+		var useComponents []discordgo.MessageComponent
+		if first {
+			useComponents = components
+		}
+
+		var err error
+		if rc.interaction != nil {
+			_, err = p.session.FollowupMessageCreate(rc.interaction, false, &discordgo.WebhookParams{
+				Content:    chunk,
+				Components: useComponents,
+			})
+		} else if rc.messageID != "" {
+			ref := &discordgo.MessageReference{MessageID: rc.messageID}
+			_, err = p.session.ChannelMessageSendComplex(rc.channelID, &discordgo.MessageSend{
+				Content:    chunk,
+				Reference:  ref,
+				Components: useComponents,
+			})
+		} else {
+			_, err = p.session.ChannelMessageSendComplex(rc.channelID, &discordgo.MessageSend{
+				Content:    chunk,
+				Components: useComponents,
+			})
+		}
+		if err != nil {
+			return fmt.Errorf("discord: send with buttons: %w", err)
+		}
+		first = false
+	}
+	return nil
 }
 
 // Send sends a new message (not a reply)
@@ -426,4 +503,64 @@ func discordUserName(u *discordgo.User) string {
 		return u.Username
 	}
 	return u.ID
+}
+
+func buildDiscordButtonComponents(buttons []core.Button) []discordgo.MessageComponent {
+	if len(buttons) == 0 {
+		return nil
+	}
+
+	// Discord supports up to 5 rows with 5 buttons each.
+	const (
+		maxRows   = 5
+		maxPerRow = 5
+		maxLabel  = 80
+		maxCustom = 100
+	)
+
+	rows := make([]discordgo.MessageComponent, 0, maxRows)
+	for i := 0; i < len(buttons) && len(rows) < maxRows; {
+		end := i + maxPerRow
+		if end > len(buttons) {
+			end = len(buttons)
+		}
+
+		row := discordgo.ActionsRow{Components: make([]discordgo.MessageComponent, 0, end-i)}
+		for _, btn := range buttons[i:end] {
+			label := strings.TrimSpace(btn.Text)
+			if label == "" {
+				label = "Action"
+			}
+			customID := strings.TrimSpace(btn.Data)
+			if customID == "" {
+				customID = label
+			}
+			label = truncateRunes(label, maxLabel)
+			customID = truncateRunes(customID, maxCustom)
+
+			row.Components = append(row.Components, discordgo.Button{
+				Label:    label,
+				CustomID: customID,
+				Style:    discordgo.SecondaryButton,
+			})
+		}
+
+		if len(row.Components) > 0 {
+			rows = append(rows, row)
+		}
+		i = end
+	}
+
+	return rows
+}
+
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max])
 }
