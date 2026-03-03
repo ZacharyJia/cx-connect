@@ -205,13 +205,10 @@ func bootstrapConfig(path string) error {
 [log]
 level = "info"
 
-[[projects]]
-name = "my-project"
-
-[projects.agent]
+[agent]
 type = "claudecode"   # "claudecode", "codex", "cursor", or "gemini"
 
-[projects.agent.options]
+[agent.options]
 work_dir = "/path/to/your/project"
 mode = "default"
 # model = "claude-sonnet-4-20250514"
@@ -219,10 +216,10 @@ mode = "default"
 # --- Choose at least one platform below ---
 
 # Feishu / Lark (WebSocket, no public IP needed)
-[[projects.platforms]]
+[[platforms]]
 type = "feishu"
 
-[projects.platforms.options]
+[platforms.options]
 app_id = "your-feishu-app-id"
 app_secret = "your-feishu-app-secret"
 
