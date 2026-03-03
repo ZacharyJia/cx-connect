@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ZacharyJia/cx-connect/core"
 )
@@ -126,44 +127,46 @@ func (cs *claudeSession) readLoop(stdout io.ReadCloser, stderrBuf *bytes.Buffer)
 		close(cs.done)
 	}()
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	reader := bufio.NewReader(stdout)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			line = bytes.TrimSpace(line)
+			if len(line) > 0 {
+				var raw map[string]any
+				if jerr := json.Unmarshal(line, &raw); jerr != nil {
+					slog.Debug("claudeSession: non-JSON line", "line", truncateStr(string(line), 400))
+				} else {
+					eventType, _ := raw["type"].(string)
+					slog.Debug("claudeSession: event", "type", eventType)
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
+					switch eventType {
+					case "system":
+						cs.handleSystem(raw)
+					case "assistant":
+						cs.handleAssistant(raw)
+					case "user":
+						cs.handleUser(raw)
+					case "result":
+						cs.handleResult(raw)
+					case "control_request":
+						cs.handleControlRequest(raw)
+					case "control_cancel_request":
+						requestID, _ := raw["request_id"].(string)
+						slog.Debug("claudeSession: permission cancelled", "request_id", requestID)
+					}
+				}
+			}
 		}
 
-		var raw map[string]any
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			slog.Debug("claudeSession: non-JSON line", "line", line)
-			continue
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			slog.Error("claudeSession: stdout read error", "error", err)
+			cs.events <- core.Event{Type: core.EventError, Error: fmt.Errorf("read stdout: %w", err)}
+			break
 		}
-
-		eventType, _ := raw["type"].(string)
-		slog.Debug("claudeSession: event", "type", eventType)
-
-		switch eventType {
-		case "system":
-			cs.handleSystem(raw)
-		case "assistant":
-			cs.handleAssistant(raw)
-		case "user":
-			cs.handleUser(raw)
-		case "result":
-			cs.handleResult(raw)
-		case "control_request":
-			cs.handleControlRequest(raw)
-		case "control_cancel_request":
-			requestID, _ := raw["request_id"].(string)
-			slog.Debug("claudeSession: permission cancelled", "request_id", requestID)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		slog.Error("claudeSession: scanner error", "error", err)
-		cs.events <- core.Event{Type: core.EventError, Error: fmt.Errorf("read stdout: %w", err)}
 	}
 }
 
@@ -439,6 +442,13 @@ func (cs *claudeSession) Close() error {
 	cs.cancel()
 	<-cs.done
 	return nil
+}
+
+func truncateStr(s string, maxRunes int) string {
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	return string([]rune(s)[:maxRunes]) + "..."
 }
 
 // filterEnv returns a copy of env with entries matching the given key removed.

@@ -161,37 +161,40 @@ func (gs *geminiSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf
 		}
 	}()
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
+	reader := bufio.NewReader(stdout)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			line = bytes.TrimSpace(line)
+			if len(line) > 0 {
+				var raw map[string]any
+				if jerr := json.Unmarshal(line, &raw); jerr != nil {
+					slog.Debug("geminiSession: non-JSON line", "line", truncate(string(line), 400))
+				} else {
+					gs.handleEvent(raw)
+				}
+			}
 		}
 
-		var raw map[string]any
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			slog.Debug("geminiSession: non-JSON line", "line", line)
-			continue
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			slog.Error("geminiSession: stdout read error", "error", err)
+			gs.events <- core.Event{Type: core.EventError, Error: fmt.Errorf("read stdout: %w", err)}
+			break
 		}
-
-		gs.handleEvent(raw)
-	}
-
-	if err := scanner.Err(); err != nil {
-		slog.Error("geminiSession: scanner error", "error", err)
-		gs.events <- core.Event{Type: core.EventError, Error: fmt.Errorf("read stdout: %w", err)}
 	}
 }
 
 // Gemini CLI stream-json event types:
-//   init       — session_id, model
-//   message    — role (user/assistant), content, delta
-//   tool_use   — tool_name, tool_id, parameters
-//   tool_result — tool_id, status, output, error
-//   error      — severity, message
-//   result     — status, stats (final event)
+//
+//	init       — session_id, model
+//	message    — role (user/assistant), content, delta
+//	tool_use   — tool_name, tool_id, parameters
+//	tool_result — tool_id, status, output, error
+//	error      — severity, message
+//	result     — status, stats (final event)
 func (gs *geminiSession) handleEvent(raw map[string]any) {
 	eventType, _ := raw["type"].(string)
 
