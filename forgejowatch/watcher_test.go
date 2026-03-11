@@ -38,7 +38,7 @@ func TestSyncDefersInitializationWhileAnySessionBusy(t *testing.T) {
 				Repository: ForgejoRepository{
 					FullName: "acme/app",
 					Name:     "app",
-					Owner:    ForgejoUser{Login: "acme"},
+					Owner:    ForgejoOwner{Login: "acme"},
 				},
 			},
 		},

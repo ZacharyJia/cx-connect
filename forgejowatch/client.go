@@ -53,13 +53,17 @@ type ForgejoIssue struct {
 }
 
 type ForgejoRepository struct {
-	FullName string      `json:"full_name"`
-	Name     string      `json:"name"`
-	Owner    ForgejoUser `json:"owner"`
+	FullName string       `json:"full_name"`
+	Name     string       `json:"name"`
+	Owner    ForgejoOwner `json:"owner"`
 }
 
 type ForgejoUser struct {
 	Login string `json:"login"`
+}
+
+type ForgejoOwner struct {
+	Login string
 }
 
 type ForgejoComment struct {
@@ -222,6 +226,27 @@ func (i ForgejoIssue) NumberValue() int64 {
 		return i.Number
 	}
 	return i.Index
+}
+
+func (o *ForgejoOwner) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if bytes.Equal(data, []byte("null")) || len(data) == 0 {
+		*o = ForgejoOwner{}
+		return nil
+	}
+
+	var login string
+	if err := json.Unmarshal(data, &login); err == nil {
+		o.Login = login
+		return nil
+	}
+
+	var user ForgejoUser
+	if err := json.Unmarshal(data, &user); err != nil {
+		return err
+	}
+	o.Login = user.Login
+	return nil
 }
 
 func (c *AdminClient) CreateSession(ctx context.Context, req CreateSessionRequest) (CreateSessionResponse, error) {
