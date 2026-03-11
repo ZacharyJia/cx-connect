@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,12 +17,16 @@ import (
 // APIServer exposes a local Unix socket API for external tools (e.g. cron jobs)
 // to send messages to active sessions.
 type APIServer struct {
-	socketPath string
-	listener   net.Listener
-	mux        *http.ServeMux
-	engines    map[string]*Engine // project name → engine
-	cron       *CronScheduler
-	mu         sync.RWMutex
+	socketPath     string
+	socketListener net.Listener
+	webListener    net.Listener
+	webAddr        string
+	socketServer   *http.Server
+	webServer      *http.Server
+	mux            *http.ServeMux
+	engines        map[string]*Engine // project name → engine
+	cron           *CronScheduler
+	mu             sync.RWMutex
 }
 
 // SendRequest is the JSON body for POST /send.
@@ -30,8 +36,21 @@ type SendRequest struct {
 	Message    string `json:"message"`
 }
 
+type AdminPromptRequest struct {
+	Project    string `json:"project"`
+	SessionKey string `json:"session_key"`
+	SessionID  string `json:"session_id"`
+	Prompt     string `json:"prompt"`
+}
+
+type AdminCreateSessionRequest struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	WorkDir string `json:"work_dir"`
+}
+
 // NewAPIServer creates an API server on a Unix socket.
-func NewAPIServer(dataDir string) (*APIServer, error) {
+func NewAPIServer(dataDir, webAddr string) (*APIServer, error) {
 	sockDir := filepath.Join(dataDir, "run")
 	if err := os.MkdirAll(sockDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create run dir: %w", err)
@@ -41,29 +60,56 @@ func NewAPIServer(dataDir string) (*APIServer, error) {
 	// Remove stale socket
 	os.Remove(sockPath)
 
-	listener, err := net.Listen("unix", sockPath)
+	socketListener, err := net.Listen("unix", sockPath)
 	if err != nil {
 		return nil, fmt.Errorf("listen unix socket: %w", err)
 	}
 	os.Chmod(sockPath, 0o660)
 
+	var webListener net.Listener
+	if webAddr != "" {
+		webListener, err = net.Listen("tcp", webAddr)
+		if err != nil {
+			socketListener.Close()
+			os.Remove(sockPath)
+			return nil, fmt.Errorf("listen web address %q: %w", webAddr, err)
+		}
+		webAddr = webListener.Addr().String()
+	}
+
 	s := &APIServer{
-		socketPath: sockPath,
-		listener:   listener,
-		mux:        http.NewServeMux(),
-		engines:    make(map[string]*Engine),
+		socketPath:     sockPath,
+		socketListener: socketListener,
+		webListener:    webListener,
+		webAddr:        webAddr,
+		mux:            http.NewServeMux(),
+		engines:        make(map[string]*Engine),
 	}
 	s.mux.HandleFunc("/send", s.handleSend)
 	s.mux.HandleFunc("/sessions", s.handleSessions)
 	s.mux.HandleFunc("/cron/add", s.handleCronAdd)
 	s.mux.HandleFunc("/cron/list", s.handleCronList)
 	s.mux.HandleFunc("/cron/del", s.handleCronDel)
+	s.mux.HandleFunc("/api/admin/projects", s.handleAdminProjects)
+	s.mux.HandleFunc("/api/admin/sessions", s.handleAdminSessions)
+	s.mux.HandleFunc("/api/admin/session", s.handleAdminSession)
+	s.mux.HandleFunc("/api/admin/session/create", s.handleAdminCreateSession)
+	s.mux.HandleFunc("/api/admin/prompt", s.handleAdminPrompt)
+	s.mux.HandleFunc("/docs/api", s.handleWebAPIDocs)
+	s.mux.HandleFunc("/", s.handleWebIndex)
 
 	return s, nil
 }
 
 func (s *APIServer) SocketPath() string {
 	return s.socketPath
+}
+
+func (s *APIServer) WebURL() string {
+	if s.webAddr == "" {
+		return ""
+	}
+	return "http://" + s.webAddr
 }
 
 func (s *APIServer) RegisterEngine(name string, e *Engine) {
@@ -77,18 +123,40 @@ func (s *APIServer) SetCronScheduler(cs *CronScheduler) {
 }
 
 func (s *APIServer) Start() {
-	go func() {
-		srv := &http.Server{Handler: s.mux}
-		if err := srv.Serve(s.listener); err != nil && err != http.ErrServerClosed {
-			slog.Error("api server error", "error", err)
-		}
-	}()
+	s.socketServer = &http.Server{Handler: s.mux}
+	go s.serve("api", s.socketListener, s.socketServer)
 	slog.Info("api server started", "socket", s.socketPath)
+
+	if s.webListener != nil {
+		s.webServer = &http.Server{Handler: s.mux}
+		go s.serve("web", s.webListener, s.webServer)
+		slog.Info("web ui started", "addr", s.WebURL())
+	}
 }
 
 func (s *APIServer) Stop() {
-	s.listener.Close()
+	if s.socketServer != nil {
+		s.socketServer.Close()
+	}
+	if s.webServer != nil {
+		s.webServer.Close()
+	}
+	if s.socketListener != nil {
+		s.socketListener.Close()
+	}
+	if s.webListener != nil {
+		s.webListener.Close()
+	}
 	os.Remove(s.socketPath)
+}
+
+func (s *APIServer) serve(name string, listener net.Listener, server *http.Server) {
+	if listener == nil || server == nil {
+		return
+	}
+	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+		slog.Error(name+" server error", "error", err)
+	}
 }
 
 func (s *APIServer) handleSend(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +232,188 @@ func (s *APIServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+func (s *APIServer) handleAdminProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.RLock()
+	projects := make([]string, 0, len(s.engines))
+	for name := range s.engines {
+		projects = append(projects, name)
+	}
+	s.mu.RUnlock()
+
+	sort.Strings(projects)
+	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
+}
+
+func (s *APIServer) handleAdminSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	project := r.URL.Query().Get("project")
+	project, engine, err := s.resolveEngine(project)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project": project,
+		"groups":  engine.AdminSessionGroups(),
+	})
+}
+
+func (s *APIServer) handleAdminSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	project := r.URL.Query().Get("project")
+	sessionKey := r.URL.Query().Get("session_key")
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionKey == "" || sessionID == "" {
+		http.Error(w, "session_key and session_id are required", http.StatusBadRequest)
+		return
+	}
+
+	project, engine, err := s.resolveEngine(project)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	detail, err := engine.AdminSessionDetail(sessionKey, sessionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	detail.Project = project
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *APIServer) handleAdminPrompt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req AdminPromptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.SessionKey == "" || req.SessionID == "" || strings.TrimSpace(req.Prompt) == "" {
+		http.Error(w, "session_key, session_id and prompt are required", http.StatusBadRequest)
+		return
+	}
+
+	project, engine, err := s.resolveEngine(req.Project)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	if err := engine.SubmitPrompt(req.SessionKey, req.SessionID, req.Prompt); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status":  "accepted",
+		"project": project,
+	})
+}
+
+func (s *APIServer) handleAdminCreateSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req AdminCreateSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	project, engine, err := s.resolveEngine(req.Project)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	result, err := engine.CreateSession("", req.Name, req.WorkDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result.Project = project
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (s *APIServer) handleWebIndex(w http.ResponseWriter, r *http.Request) {
+	if s.webListener == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write([]byte(adminWebUIHTML))
+}
+
+func (s *APIServer) handleWebAPIDocs(w http.ResponseWriter, r *http.Request) {
+	if s.webListener == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.URL.Path != "/docs/api" {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write([]byte(adminAPIDocsHTML))
+}
+
+func (s *APIServer) resolveEngine(project string) (string, *Engine, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if project != "" {
+		engine, ok := s.engines[project]
+		if !ok {
+			return "", nil, fmt.Errorf("project %q not found", project)
+		}
+		return project, engine, nil
+	}
+
+	if len(s.engines) == 1 {
+		for name, engine := range s.engines {
+			return name, engine, nil
+		}
+	}
+
+	return "", nil, fmt.Errorf("project is required (multiple projects configured)")
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // ── Cron API ───────────────────────────────────────────────────

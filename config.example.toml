@@ -132,6 +132,12 @@ language = "en"
 # Session data storage directory (default: ~/.cx-connect)
 # data_dir = "/path/to/custom/dir"
 
+# Local web UI for browsing sessions and injecting prompts.
+# Binds to localhost only unless you change the listen address.
+# [web]
+# enabled = true
+# listen = "127.0.0.1:6380"
+
 [log]
 level = "info" # debug, info, warn, error
 

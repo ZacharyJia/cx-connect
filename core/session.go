@@ -14,7 +14,7 @@ import (
 type Session struct {
 	ID             string         `json:"id"`
 	Name           string         `json:"name"`
-	WorkDir        string         `json:"work_dir"`        // working directory for this session
+	WorkDir        string         `json:"work_dir"` // working directory for this session
 	AgentSessionID string         `json:"agent_session_id"`
 	History        []HistoryEntry `json:"history"`
 	CreatedAt      time.Time      `json:"created_at"`
@@ -22,6 +22,24 @@ type Session struct {
 
 	mu   sync.Mutex `json:"-"`
 	busy bool       `json:"-"`
+}
+
+type SessionSnapshot struct {
+	ID             string         `json:"id"`
+	Name           string         `json:"name"`
+	WorkDir        string         `json:"work_dir"`
+	AgentSessionID string         `json:"agent_session_id"`
+	History        []HistoryEntry `json:"history,omitempty"`
+	HistoryCount   int            `json:"history_count"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	Busy           bool           `json:"busy"`
+}
+
+type UserSessionSnapshot struct {
+	UserKey         string            `json:"user_key"`
+	ActiveSessionID string            `json:"active_session_id"`
+	Sessions        []SessionSnapshot `json:"sessions"`
 }
 
 func (s *Session) TryLock() bool {
@@ -55,6 +73,26 @@ func (s *Session) ClearHistory() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.History = nil
+}
+
+func (s *Session) Snapshot(includeHistory bool) SessionSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	snap := SessionSnapshot{
+		ID:             s.ID,
+		Name:           s.Name,
+		WorkDir:        s.WorkDir,
+		AgentSessionID: s.AgentSessionID,
+		HistoryCount:   len(s.History),
+		CreatedAt:      s.CreatedAt,
+		UpdatedAt:      s.UpdatedAt,
+		Busy:           s.busy,
+	}
+	if includeHistory {
+		snap.History = append([]HistoryEntry(nil), s.History...)
+	}
+	return snap
 }
 
 // GetHistory returns the last n entries. If n <= 0, returns all.
@@ -176,6 +214,63 @@ func (sm *SessionManager) ActiveSessionID(userKey string) string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.activeSession[userKey]
+}
+
+func (sm *SessionManager) SetActiveSession(userKey, target string) (*Session, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	for _, sid := range sm.userSessions[userKey] {
+		s := sm.sessions[sid]
+		if s != nil && (s.ID == target || s.Name == target) {
+			sm.activeSession[userKey] = s.ID
+			sm.saveLocked()
+			return s, nil
+		}
+	}
+	return nil, fmt.Errorf("session %q not found", target)
+}
+
+func (sm *SessionManager) GetSession(userKey, target string) (*Session, bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	for _, sid := range sm.userSessions[userKey] {
+		s := sm.sessions[sid]
+		if s != nil && (s.ID == target || s.Name == target) {
+			return s, true
+		}
+	}
+	return nil, false
+}
+
+func (sm *SessionManager) Snapshot() []UserSessionSnapshot {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	out := make([]UserSessionSnapshot, 0, len(sm.userSessions))
+	for userKey, ids := range sm.userSessions {
+		sessions := make([]SessionSnapshot, 0, len(ids))
+		for _, sid := range ids {
+			if s := sm.sessions[sid]; s != nil {
+				sessions = append(sessions, s.Snapshot(false))
+			}
+		}
+		out = append(out, UserSessionSnapshot{
+			UserKey:         userKey,
+			ActiveSessionID: sm.activeSession[userKey],
+			Sessions:        sessions,
+		})
+	}
+	return out
+}
+
+func (sm *SessionManager) SessionSnapshot(userKey, target string, includeHistory bool) (SessionSnapshot, bool) {
+	s, ok := sm.GetSession(userKey, target)
+	if !ok {
+		return SessionSnapshot{}, false
+	}
+	return s.Snapshot(includeHistory), true
 }
 
 // Save persists current state to disk. Safe to call from outside (e.g. after message processing).

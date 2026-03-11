@@ -147,7 +147,15 @@ func main() {
 	}
 
 	// Start internal API server for CLI send
-	apiSrv, err := core.NewAPIServer(cfg.DataDir)
+	webAddr := ""
+	if cfg.Web.Enabled || strings.TrimSpace(cfg.Web.Listen) != "" {
+		webAddr = strings.TrimSpace(cfg.Web.Listen)
+		if webAddr == "" {
+			webAddr = "127.0.0.1:6380"
+		}
+	}
+
+	apiSrv, err := core.NewAPIServer(cfg.DataDir, webAddr)
 	if err != nil {
 		slog.Warn("api server unavailable", "error", err)
 	} else {
@@ -232,6 +240,11 @@ func bootstrapConfig(path string) error {
 
 [log]
 level = "info"
+
+# Optional local web UI
+# [web]
+# enabled = true
+# listen = "127.0.0.1:6380"
 
 [agent]
 type = "claudecode"   # "claudecode", "codex", "cursor", or "gemini"

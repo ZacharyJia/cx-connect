@@ -39,15 +39,16 @@ var VersionInfo string
 
 // Engine routes messages between platforms and the agent for a single project.
 type Engine struct {
-	name       string
-	agent      Agent
-	platforms  []Platform
-	sessions   *SessionManager
-	ctx        context.Context
-	cancel     context.CancelFunc
-	i18n       *I18n
-	speech     SpeechCfg
-	allowUsers map[string]bool // key = "platform:user_id"
+	name        string
+	agent       Agent
+	platforms   []Platform
+	webPlatform Platform
+	sessions    *SessionManager
+	ctx         context.Context
+	cancel      context.CancelFunc
+	i18n        *I18n
+	speech      SpeechCfg
+	allowUsers  map[string]bool // key = "platform:user_id"
 
 	providerSaveFunc       func(providerName string) error
 	providerAddSaveFunc    func(p ProviderConfig) error
@@ -127,6 +128,7 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		name:              name,
 		agent:             ag,
 		platforms:         platforms,
+		webPlatform:       newWebAdminPlatform(),
 		sessions:          NewSessionManager(sessionStorePath),
 		ctx:               ctx,
 		cancel:            cancel,

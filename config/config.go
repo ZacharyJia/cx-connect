@@ -12,13 +12,19 @@ import (
 var ConfigPath string
 
 type Config struct {
-	DataDir    string           `toml:"data_dir"` // session store directory, default ~/.cx-connect
-	Agent      AgentConfig     `toml:"agent"`    // global agent config
+	DataDir    string           `toml:"data_dir"`  // session store directory, default ~/.cx-connect
+	Agent      AgentConfig      `toml:"agent"`     // global agent config
 	Platforms  []PlatformConfig `toml:"platforms"` // platform configs
-	AllowUsers []AllowUser     `toml:"allow_users"`
-	Log        LogConfig       `toml:"log"`
-	Language   string          `toml:"language"` // "en" or "zh", default is "en"
-	Speech     SpeechConfig    `toml:"speech"`
+	AllowUsers []AllowUser      `toml:"allow_users"`
+	Log        LogConfig        `toml:"log"`
+	Language   string           `toml:"language"` // "en" or "zh", default is "en"
+	Speech     SpeechConfig     `toml:"speech"`
+	Web        WebConfig        `toml:"web"`
+}
+
+type WebConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Listen  string `toml:"listen"`
 }
 
 // SpeechConfig configures speech-to-text for voice messages.
@@ -40,7 +46,7 @@ type SpeechConfig struct {
 // AllowUser defines a user that is allowed to access the bot.
 type AllowUser struct {
 	Platform string `toml:"platform"` // "feishu", "telegram", "qq", etc.
-	UserID   string `toml:"user_id"` // platform-specific user ID
+	UserID   string `toml:"user_id"`  // platform-specific user ID
 }
 
 type AgentConfig struct {
