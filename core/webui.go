@@ -185,11 +185,15 @@ const adminWebUIHTML = `<!doctype html>
       display: grid;
       gap: 12px;
       max-height: calc(100vh - 235px);
-      overflow: auto;
+      min-height: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
       padding-right: 4px;
     }
 
     .group {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
       border: 1px solid var(--line);
       border-radius: 18px;
       background: rgba(255,255,255,0.42);
@@ -213,6 +217,14 @@ const adminWebUIHTML = `<!doctype html>
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
+    }
+
+    .group-sessions {
+      display: grid;
+      min-height: 0;
+      max-height: min(52vh, 420px);
+      overflow-x: hidden;
+      overflow-y: auto;
     }
 
     .badge {
@@ -570,7 +582,7 @@ const adminWebUIHTML = `<!doctype html>
 
         return '<section class="group">' +
           '<div class="group-head"><strong>' + escapeHTML(group.session_key) + '</strong><div class="group-meta">' + badges + '</div></div>' +
-          sessions +
+          '<div class="group-sessions">' + sessions + '</div>' +
         '</section>';
       }).join("");
 
