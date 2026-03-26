@@ -4,15 +4,20 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/ZacharyJia/cx-connect/config"
+	"github.com/ZacharyJia/cx-connect/core"
 	"github.com/ZacharyJia/cx-connect/forgejowatch"
 )
+
+const defaultProjectName = "default"
 
 func runForgejoWatch(args []string) {
 	if len(args) == 0 {
@@ -109,6 +114,10 @@ func runForgejoWatchList(args []string) {
 }
 
 func buildForgejoWatcherRunner(cfg *config.Config, raw config.ForgejoWatcherConfig) (*forgejowatch.Runner, error) {
+	return buildForgejoWatcherRunnerWithAdmin(cfg, raw, forgejowatch.NewAdminClient(defaultProjectName, resolveSocketPath(cfg.DataDir)))
+}
+
+func buildForgejoWatcherRunnerWithAdmin(cfg *config.Config, raw config.ForgejoWatcherConfig, admin forgejowatch.AdminAPI) (*forgejowatch.Runner, error) {
 	token := raw.Token
 	if token == "" && raw.TokenEnv != "" {
 		token = os.Getenv(raw.TokenEnv)
@@ -127,7 +136,12 @@ func buildForgejoWatcherRunner(cfg *config.Config, raw config.ForgejoWatcherConf
 	}
 
 	statePath := filepath.Join(cfg.DataDir, "forgejo-watch", raw.Name+".json")
-	return forgejowatch.NewRunner(forgejowatch.Config{
+	store, err := forgejowatch.LoadStateStore(statePath)
+	if err != nil {
+		return nil, err
+	}
+
+	return forgejowatch.NewRunnerWithClients(forgejowatch.Config{
 		Name:                  raw.Name,
 		BaseURL:               raw.BaseURL,
 		Token:                 token,
@@ -137,7 +151,113 @@ func buildForgejoWatcherRunner(cfg *config.Config, raw config.ForgejoWatcherConf
 		TriggerOnSelfActivity: raw.TriggerOnSelfActivity,
 		WorkDir:               raw.WorkDir,
 		State:                 raw.State,
-	}, statePath, resolveSocketPath(cfg.DataDir))
+	}, store, forgejowatch.NewForgejoClient(raw.BaseURL, token, raw.Username), admin), nil
+}
+
+func startForgejoWatchers(ctx context.Context, cfg *config.Config, engine *core.Engine) (*sync.WaitGroup, error) {
+	var runners []*forgejowatch.Runner
+	admin := newEngineAdminClient(engine.ProjectName(), engine)
+	for _, watcherCfg := range cfg.ForgejoWatchers {
+		runner, err := buildForgejoWatcherRunnerWithAdmin(cfg, watcherCfg, admin)
+		if err != nil {
+			return nil, err
+		}
+		runners = append(runners, runner)
+	}
+
+	wg := &sync.WaitGroup{}
+	for i, watcherCfg := range cfg.ForgejoWatchers {
+		runner := runners[i]
+		wg.Add(1)
+		go func(name string, runner *forgejowatch.Runner) {
+			defer wg.Done()
+			slog.Info("forgejo watcher started", "watcher", name)
+			for {
+				if err := runner.Run(ctx); err != nil {
+					if err == context.Canceled {
+						slog.Info("forgejo watcher stopped", "watcher", name)
+						return
+					}
+					slog.Error("forgejo watcher run failed", "watcher", name, "error", err)
+					select {
+					case <-ctx.Done():
+						slog.Info("forgejo watcher stopped", "watcher", name)
+						return
+					case <-time.After(5 * time.Second):
+					}
+					continue
+				}
+				return
+			}
+		}(watcherCfg.Name, runner)
+	}
+	return wg, nil
+}
+
+type engineAdminClient struct {
+	project string
+	engine  *core.Engine
+}
+
+func newEngineAdminClient(project string, engine *core.Engine) *engineAdminClient {
+	return &engineAdminClient{
+		project: project,
+		engine:  engine,
+	}
+}
+
+func (c *engineAdminClient) CreateSession(ctx context.Context, req forgejowatch.CreateSessionRequest) (forgejowatch.CreateSessionResponse, error) {
+	if err := c.ensureProject(ctx, req.Project); err != nil {
+		return forgejowatch.CreateSessionResponse{}, err
+	}
+	result, err := c.engine.CreateSession(req.SessionKey, req.Name, req.WorkDir)
+	if err != nil {
+		return forgejowatch.CreateSessionResponse{}, err
+	}
+
+	resp := forgejowatch.CreateSessionResponse{SessionKey: result.SessionKey}
+	resp.Session.ID = result.Session.ID
+	return resp, nil
+}
+
+func (c *engineAdminClient) ListSessionGroups(ctx context.Context, project string) ([]forgejowatch.AdminSessionGroup, error) {
+	if err := c.ensureProject(ctx, project); err != nil {
+		return nil, err
+	}
+
+	groups := c.engine.AdminSessionGroups()
+	result := make([]forgejowatch.AdminSessionGroup, 0, len(groups))
+	for _, group := range groups {
+		sessions := make([]forgejowatch.AdminSessionSummary, 0, len(group.Sessions))
+		for _, session := range group.Sessions {
+			sessions = append(sessions, forgejowatch.AdminSessionSummary{
+				ID:   session.ID,
+				Busy: session.Busy,
+			})
+		}
+		result = append(result, forgejowatch.AdminSessionGroup{
+			SessionKey: group.SessionKey,
+			Sessions:   sessions,
+		})
+	}
+	return result, nil
+}
+
+func (c *engineAdminClient) SubmitPrompt(ctx context.Context, req forgejowatch.SubmitPromptRequest) error {
+	if err := c.ensureProject(ctx, req.Project); err != nil {
+		return err
+	}
+	return c.engine.SubmitPrompt(req.SessionKey, req.SessionID, req.Prompt)
+}
+
+func (c *engineAdminClient) ensureProject(ctx context.Context, project string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if project == "" || project == c.project {
+		return nil
+	}
+	return fmt.Errorf("project %q not found", project)
 }
 
 func mustLoadForgejoWatcherConfig(configFile, name string) (*config.Config, config.ForgejoWatcherConfig) {

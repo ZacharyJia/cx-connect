@@ -467,13 +467,15 @@ work_dir = "default"
 state = "open"
 ```
 
-Commands:
+Startup:
 
 ```bash
+cx-connect
 cx-connect forgejo-watch list
-cx-connect forgejo-watch run --name ops
 cx-connect forgejo-watch run --name ops --once
 ```
+
+When `forgejo_watchers` are configured, the main `cx-connect` process now starts one goroutine per watcher automatically. You no longer need a separate `forgejo-watch run` command for normal operation. `run --once` remains available for debugging and one-off syncs.
 
 Behavior notes:
 

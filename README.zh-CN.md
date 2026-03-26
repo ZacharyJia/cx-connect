@@ -470,13 +470,15 @@ work_dir = "default"
 state = "open"
 ```
 
-命令：
+启动方式：
 
 ```bash
+cx-connect
 cx-connect forgejo-watch list
-cx-connect forgejo-watch run --name ops
 cx-connect forgejo-watch run --name ops --once
 ```
+
+只要配置了 `forgejo_watchers`，`cx-connect` 主进程启动时就会自动为每个 watcher 启一个 goroutine 并持续轮询，不再需要额外执行 `forgejo-watch run`。`run --once` 仍可用于手动排查或单次同步。
 
 行为说明：
 

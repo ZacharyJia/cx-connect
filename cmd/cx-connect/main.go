@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"flag"
@@ -117,6 +118,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error loading config (%s): %v\n", configPath, err)
 		os.Exit(1)
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	config.ConfigPath = configPath
 	slog.Info("config loaded", "path", configPath)
@@ -169,18 +172,34 @@ func main() {
 		apiSrv.Start()
 	}
 
-	slog.Info("cx-connect is running")
+	watcherWG, err := startForgejoWatchers(ctx, cfg, engine)
+	if err != nil {
+		if apiSrv != nil {
+			apiSrv.Stop()
+		}
+		if cronSched != nil {
+			cronSched.Stop()
+		}
+		if stopErr := engine.Stop(); stopErr != nil {
+			slog.Error("shutdown error", "error", stopErr)
+		}
+		slog.Error("failed to start forgejo watchers", "error", err)
+		os.Exit(1)
+	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	slog.Info("cx-connect is running")
+	<-ctx.Done()
 
 	slog.Info("shutting down...")
+	stop()
 	if cronSched != nil {
 		cronSched.Stop()
 	}
 	if apiSrv != nil {
 		apiSrv.Stop()
+	}
+	if watcherWG != nil {
+		watcherWG.Wait()
 	}
 	if err := engine.Stop(); err != nil {
 		slog.Error("shutdown error", "error", err)
